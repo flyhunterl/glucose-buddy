@@ -1,0 +1,55 @@
+version: '2.2'
+
+services:
+  nightscout-web:
+    build: .
+    container_name: nightscout-web-monitor
+    restart: unless-stopped
+    ports:
+      - "1338:1338"
+    volumes:
+      # 持久化配置文件
+      - ./config.toml:/app/config.toml
+      # 持久化数据库
+      - ./data:/app/data
+      # 持久化日志（可选）
+      - ./logs:/app/logs
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_PATH=/app/data/nightscout_data.db
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:1338/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：添加Ollama服务用于AI分析
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nightscout-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+
+  # 可选：添加Nginx反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: nightscout-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - nightscout-web
+
+volumes:
+  ollama_data:

@@ -1,0 +1,702 @@
+{% extends "base.html" %}
+
+{% block title %}血糖数据 - Nightscout 血糖监控{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- 控制面板 -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-tachometer-alt"></i> 控制面板
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-12 col-lg-8 mb-3 mb-lg-0">
+                        <div class="btn-group w-100" role="group">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(1)">今日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(3)">3日</button>
+                            <button type="button" class="btn btn-primary active btn-sm" onclick="loadData(7)">7日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(15)">15日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(30)">30日</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-4">
+                        <div class="d-grid gap-2 d-lg-flex justify-content-lg-end">
+                            <button class="btn btn-success btn-sm" onclick="getAnalysis()">
+                                <i class="fas fa-brain"></i> <span class="d-none d-sm-inline">AI分析</span>
+                            </button>
+                            <button class="btn btn-info btn-sm" onclick="testConnection()">
+                                <i class="fas fa-link"></i> <span class="d-none d-sm-inline">测试连接</span>
+                            </button>
+                            <button class="btn btn-secondary btn-sm" onclick="syncDataAndLoad()">
+                                <i class="fas fa-sync"></i> <span class="d-none d-sm-inline">同步</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="col-12 mb-4">
+        <div class="row" id="stats-cards">
+            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-primary mb-2">平均血糖</h6>
+                        <h4 id="avg-glucose" class="mb-1">--</h4>
+                        <small class="text-muted">mmol/L</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-success mb-2">目标范围内</h6>
+                        <h4 id="in-range" class="mb-1">--</h4>
+                        <small class="text-muted">%</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-warning mb-2">最高血糖</h6>
+                        <h4 id="max-glucose" class="mb-1">--</h4>
+                        <small class="text-muted">mmol/L</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-danger mb-2">最低血糖</h6>
+                        <h4 id="min-glucose" class="mb-1">--</h4>
+                        <small class="text-muted">mmol/L</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-2 col-lg-6 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-info mb-2">糖化血红蛋白</h6>
+                        <h4 id="hba1c-value" class="mb-1">--</h4>
+                        <small id="hba1c-unit" class="text-muted">%</small>
+                        <div id="hba1c-status" class="mt-1">
+                            <small class="badge bg-secondary">--</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-2 col-lg-6 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-purple mb-2">血糖变异系数</h6>
+                        <h4 id="cv-value" class="mb-1">--</h4>
+                        <small class="text-muted">%</small>
+                        <div id="cv-status" class="mt-1">
+                            <small class="badge bg-secondary">--</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 血糖图表 -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-line"></i> 血糖趋势图
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                    <canvas id="glucoseChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 血糖数据表格 -->
+    <div class="col-12 col-xl-8 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-table"></i> 血糖数据
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="sticky-header">
+                            <tr>
+                                <th class="d-none d-sm-table-cell">时间</th>
+                                <th class="d-sm-none">时间/血糖</th>
+                                <th class="d-none d-sm-table-cell">血糖值 (mmol/L)</th>
+                                <th class="d-none d-md-table-cell">血糖值 (mg/dL)</th>
+                                <th class="d-none d-sm-table-cell">趋势</th>
+                            </tr>
+                        </thead>
+                        <tbody id="glucose-table-body">
+                            <tr>
+                                <td colspan="4" class="loading">
+                                    <i class="fas fa-spinner fa-spin"></i> 加载中...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 治疗数据表格 -->
+    <div class="col-12 col-xl-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-utensils"></i> 餐食记录
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="sticky-header">
+                            <tr>
+                                <th class="d-none d-sm-table-cell">时间</th>
+                                <th class="d-sm-none">时间/营养</th>
+                                <th class="d-none d-sm-table-cell">营养成分</th>
+                                <th class="d-none d-md-table-cell">类型/备注</th>
+                            </tr>
+                        </thead>
+                        <tbody id="treatment-table-body">
+                            <tr>
+                                <td colspan="3" class="loading">
+                                    <i class="fas fa-spinner fa-spin"></i> 加载中...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- AI分析模态框 -->
+<div class="modal fade" id="analysisModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-brain"></i> AI血糖分析报告
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="analysis-content">
+                    <div class="text-center">
+                        <i class="fas fa-spinner fa-spin"></i> 分析中，请稍候...
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" onclick="copyAnalysis()">
+                    <i class="fas fa-copy"></i> 复制分析
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let currentDays = 7;
+    let glucoseChart = null;
+    
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        // 先同步数据，然后加载显示
+        syncDataAndLoad();
+    });
+
+    // 同步数据并加载（页面加载时使用）
+    function syncDataAndLoad() {
+        showNotification('正在同步最新数据...', 'info');
+
+        // 使用与手动同步相同的逻辑，但不依赖按钮元素
+        fetch('/api/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({days: 7})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`, 'success');
+                // 同步成功后加载数据
+                loadData(7);
+            } else {
+                showNotification('同步失败: ' + data.error, 'warning');
+                // 即使同步失败也尝试加载本地数据
+                loadData(7);
+            }
+        })
+        .catch(error => {
+            console.error('同步失败:', error);
+            showNotification('同步失败: ' + error.message, 'warning');
+            // 同步失败也加载本地数据
+            loadData(7);
+        });
+    }
+    
+    // 加载数据
+    function loadData(days = 7) {
+        currentDays = days;
+
+        // 更新按钮状态
+        document.querySelectorAll('.btn-group .btn').forEach(btn => {
+            btn.classList.remove('active', 'btn-primary');
+            btn.classList.add('btn-outline-primary');
+        });
+
+        // 如果有事件对象，更新对应按钮状态
+        if (typeof event !== 'undefined' && event.target) {
+            event.target.classList.remove('btn-outline-primary');
+            event.target.classList.add('btn-primary', 'active');
+        } else {
+            // 页面初始化时，激活对应天数的按钮
+            const buttons = document.querySelectorAll('.btn-group .btn');
+            buttons.forEach((btn, index) => {
+                const btnDays = [1, 3, 7, 15, 30][index];
+                if (btnDays === days) {
+                    btn.classList.remove('btn-outline-primary');
+                    btn.classList.add('btn-primary', 'active');
+                }
+            });
+        }
+
+        // 加载血糖数据
+        loadGlucoseData(days);
+        // 加载治疗数据
+        loadTreatmentData(days);
+    }
+    
+    // 加载血糖数据
+    function loadGlucoseData(days) {
+        fetch(`/api/glucose-data?days=${days}`)
+            .then(response => response.json())
+            .then(data => {
+                updateGlucoseTable(data);
+                updateGlucoseChart(data);
+                loadStatistics(days);
+            })
+            .catch(error => {
+                console.error('加载血糖数据失败:', error);
+                showNotification('加载血糖数据失败', 'danger');
+            });
+    }
+
+    // 加载统计数据
+    function loadStatistics(days) {
+        fetch(`/api/statistics?days=${days}`)
+            .then(response => response.json())
+            .then(data => {
+                updateStats(data);
+            })
+            .catch(error => {
+                console.error('加载统计数据失败:', error);
+                // 如果统计API失败，显示默认值
+                updateStats({});
+            });
+    }
+    
+    // 加载治疗数据
+    function loadTreatmentData(days) {
+        fetch(`/api/treatment-data?days=${days}`)
+            .then(response => response.json())
+            .then(data => {
+                updateTreatmentTable(data);
+            })
+            .catch(error => {
+                console.error('加载治疗数据失败:', error);
+                showNotification('加载治疗数据失败', 'danger');
+            });
+    }
+    
+    // 更新血糖表格
+    function updateGlucoseTable(data) {
+        const tbody = document.getElementById('glucose-table-body');
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无数据</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(item => {
+            // 移动端合并显示
+            const mobileContent = `
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-bold">${item.time.split(' ')[1]}</div>
+                        <small class="text-muted">${item.time.split(' ')[0]}</small>
+                    </div>
+                    <div class="text-end">
+                        <div class="fw-bold ${getGlucoseColor(item.value_mmol)}">${formatGlucoseValue(item.value_mmol)} mmol/L</div>
+                        <small class="text-muted">${item.value_mgdl} mg/dL ${formatDirection(item.direction)}</small>
+                    </div>
+                </div>
+            `;
+
+            return `
+                <tr>
+                    <td class="d-none d-sm-table-cell">${item.time}</td>
+                    <td class="d-sm-none">${mobileContent}</td>
+                    <td class="d-none d-sm-table-cell ${getGlucoseColor(item.value_mmol)}">${formatGlucoseValue(item.value_mmol)}</td>
+                    <td class="d-none d-md-table-cell">${item.value_mgdl}</td>
+                    <td class="d-none d-sm-table-cell">${formatDirection(item.direction)}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // 获取血糖值颜色
+    function getGlucoseColor(value) {
+        if (value < 3.9) return 'text-danger';
+        if (value > 10.0) return 'text-warning';
+        return 'text-success';
+    }
+    
+    // 更新治疗表格
+    function updateTreatmentTable(data) {
+        const tbody = document.getElementById('treatment-table-body');
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
+            return;
+        }
+
+        // 过滤有营养成分的数据（碳水、蛋白质或脂肪任一大于0）
+        const filteredData = data.filter(item =>
+            (item.carbs && item.carbs > 0) ||
+            (item.protein && item.protein > 0) ||
+            (item.fat && item.fat > 0) ||
+            item.event_type === 'Carb Correction' ||
+            item.event_type === 'Meal Bolus'
+        );
+
+        tbody.innerHTML = filteredData.map(item => {
+            // 构建营养成分显示
+            const nutritionParts = [];
+            if (item.carbs && item.carbs > 0) {
+                nutritionParts.push(`<span class="badge bg-primary me-1">${item.carbs}g碳水</span>`);
+            }
+            if (item.protein && item.protein > 0) {
+                nutritionParts.push(`<span class="badge bg-success me-1">${item.protein}g蛋白质</span>`);
+            }
+            if (item.fat && item.fat > 0) {
+                nutritionParts.push(`<span class="badge bg-warning me-1">${item.fat}g脂肪</span>`);
+            }
+
+            // 如果没有营养成分但是相关事件类型，显示事件类型
+            const nutritionDisplay = nutritionParts.length > 0
+                ? nutritionParts.join('')
+                : `<span class="text-muted">${item.event_type || '无营养数据'}</span>`;
+
+            // 构建类型/备注显示
+            const typeAndNotes = [];
+            if (item.event_type && item.event_type !== 'Meal Bolus') {
+                typeAndNotes.push(item.event_type);
+            }
+            if (item.notes) {
+                typeAndNotes.push(item.notes);
+            }
+            const typeDisplay = typeAndNotes.length > 0 ? typeAndNotes.join(' - ') : '-';
+
+            // 移动端合并显示
+            const mobileContent = `
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="fw-bold">${item.time.split(' ')[1]}</div>
+                        <small class="text-muted">${item.time.split(' ')[0]}</small>
+                    </div>
+                    <div class="text-end">
+                        <div class="mb-1">${nutritionDisplay}</div>
+                        <small class="text-muted">${typeDisplay}</small>
+                    </div>
+                </div>
+            `;
+
+            return `
+                <tr>
+                    <td class="d-none d-sm-table-cell">${item.time}</td>
+                    <td class="d-sm-none">${mobileContent}</td>
+                    <td class="d-none d-sm-table-cell">${nutritionDisplay}</td>
+                    <td class="d-none d-md-table-cell">${typeDisplay}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+    
+    // 更新统计信息
+    function updateStats(data) {
+        // 基础统计数据
+        document.getElementById('avg-glucose').textContent = data.avg_glucose || '--';
+        document.getElementById('in-range').textContent = data.in_range_percentage || '--';
+        document.getElementById('max-glucose').textContent = data.max_glucose || '--';
+        document.getElementById('min-glucose').textContent = data.min_glucose || '--';
+
+        // 糖化血红蛋白
+        if (data.hba1c_data && data.hba1c_data.hba1c_adag_percent) {
+            const hba1c = data.hba1c_data.hba1c_adag_percent;
+            const hba1cMmol = data.hba1c_data.hba1c_adag_mmol;
+
+            document.getElementById('hba1c-value').textContent = hba1c;
+            document.getElementById('hba1c-unit').textContent = `% (${hba1cMmol} mmol/mol)`;
+
+            // 设置状态标签和颜色
+            const statusElement = document.getElementById('hba1c-status');
+            let statusText = '';
+            let statusClass = '';
+
+            if (hba1c < 5.7) {
+                statusText = '正常范围';
+                statusClass = 'bg-success';
+            } else if (hba1c < 6.5) {
+                statusText = '糖尿病前期';
+                statusClass = 'bg-warning';
+            } else if (hba1c < 7.0) {
+                statusText = '控制良好';
+                statusClass = 'bg-info';
+            } else if (hba1c < 8.0) {
+                statusText = '控制一般';
+                statusClass = 'bg-warning';
+            } else {
+                statusText = '控制较差';
+                statusClass = 'bg-danger';
+            }
+
+            statusElement.innerHTML = `<small class="badge ${statusClass}">${statusText}</small>`;
+        } else {
+            document.getElementById('hba1c-value').textContent = '--';
+            document.getElementById('hba1c-unit').textContent = '%';
+            document.getElementById('hba1c-status').innerHTML = '<small class="badge bg-secondary">--</small>';
+        }
+
+        // 血糖变异系数
+        if (data.cv_data && data.cv_data.cv_percent) {
+            const cv = data.cv_data.cv_percent;
+
+            document.getElementById('cv-value').textContent = cv;
+
+            // 设置状态标签和颜色
+            const statusElement = document.getElementById('cv-status');
+            let statusText = '';
+            let statusClass = '';
+
+            if (cv <= 36) {
+                statusText = '波动良好';
+                statusClass = 'bg-success';
+            } else if (cv <= 50) {
+                statusText = '波动一般';
+                statusClass = 'bg-warning';
+            } else {
+                statusText = '波动较大';
+                statusClass = 'bg-danger';
+            }
+
+            statusElement.innerHTML = `<small class="badge ${statusClass}">${statusText}</small>`;
+        } else {
+            document.getElementById('cv-value').textContent = '--';
+            document.getElementById('cv-status').innerHTML = '<small class="badge bg-secondary">--</small>';
+        }
+    }
+    
+    // 更新血糖图表
+    function updateGlucoseChart(data) {
+        const ctx = document.getElementById('glucoseChart').getContext('2d');
+        
+        if (glucoseChart) {
+            glucoseChart.destroy();
+        }
+        
+        const labels = data.map(item => item.time).reverse();
+        const values = data.map(item => item.value_mmol).reverse();
+        
+        glucoseChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '血糖值 (mmol/L)',
+                    data: values,
+                    borderColor: '#007bff',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    tension: 0.1,
+                    pointRadius: 3,
+                    pointHoverRadius: 5
+                }, {
+                    label: '目标范围上限',
+                    data: new Array(labels.length).fill(10.0),
+                    borderColor: '#28a745',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                }, {
+                    label: '目标范围下限',
+                    data: new Array(labels.length).fill(3.9),
+                    borderColor: '#28a745',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index'
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        min: Math.min(3.0, Math.min(...values) - 1),
+                        max: Math.max(15.0, Math.max(...values) + 1),
+                        grid: {
+                            color: 'rgba(0,0,0,0.1)'
+                        },
+                        ticks: {
+                            font: {
+                                size: window.innerWidth < 768 ? 10 : 12
+                            }
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            maxTicksLimit: window.innerWidth < 768 ? 6 : 10,
+                            font: {
+                                size: window.innerWidth < 768 ? 10 : 12
+                            },
+                            maxRotation: window.innerWidth < 768 ? 45 : 0
+                        },
+                        grid: {
+                            color: 'rgba(0,0,0,0.1)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: window.innerWidth < 768 ? 'bottom' : 'top',
+                        labels: {
+                            font: {
+                                size: window.innerWidth < 768 ? 10 : 12
+                            },
+                            usePointStyle: true,
+                            padding: window.innerWidth < 768 ? 10 : 20
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        titleFont: {
+                            size: window.innerWidth < 768 ? 12 : 14
+                        },
+                        bodyFont: {
+                            size: window.innerWidth < 768 ? 11 : 13
+                        },
+                        padding: window.innerWidth < 768 ? 8 : 12
+                    }
+                }
+            }
+        });
+    }
+    
+    // 获取AI分析
+    function getAnalysis() {
+        const modal = new bootstrap.Modal(document.getElementById('analysisModal'));
+        modal.show();
+        
+        document.getElementById('analysis-content').innerHTML = `
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin"></i> 分析中，请稍候...
+            </div>
+        `;
+        
+        fetch(`/api/analysis?days=${currentDays}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.analysis) {
+                    document.getElementById('analysis-content').innerHTML = `
+                        <div class="alert alert-info">
+                            <h6><i class="fas fa-info-circle"></i> 分析结果</h6>
+                            <pre style="white-space: pre-wrap; font-family: inherit;">${data.analysis}</pre>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('analysis-content').innerHTML = `
+                        <div class="alert alert-danger">
+                            <h6><i class="fas fa-exclamation-triangle"></i> 分析失败</h6>
+                            <p>${data.error || '未知错误'}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                document.getElementById('analysis-content').innerHTML = `
+                    <div class="alert alert-danger">
+                        <h6><i class="fas fa-exclamation-triangle"></i> 分析失败</h6>
+                        <p>网络错误: ${error.message}</p>
+                    </div>
+                `;
+            });
+    }
+    
+    // 复制分析结果
+    function copyAnalysis() {
+        const content = document.querySelector('#analysis-content pre');
+        if (content) {
+            navigator.clipboard.writeText(content.textContent).then(() => {
+                showNotification('分析结果已复制到剪贴板', 'success');
+            });
+        }
+    }
+    
+    // 测试连接
+    function testConnection() {
+        const btn = event.target;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中...';
+        btn.disabled = true;
+        
+        fetch('/api/test-connection', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(data.message, 'success');
+            } else {
+                showNotification(data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            showNotification('测试失败: ' + error.message, 'danger');
+        })
+        .finally(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        });
+    }
+</script>
+{% endblock %}

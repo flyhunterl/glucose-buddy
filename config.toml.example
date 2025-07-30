@@ -1,0 +1,31 @@
+[basic]
+enable = true
+timezone_offset = 8
+
+[nightscout]
+api_url = "https://your-nightscout-url.herokuapp.com"
+api_key = "your-api-secret-here" 
+timezone_offset = 8
+
+[ai_config]
+api_url = "http://localhost:11434/v1/chat/completions"
+api_key = "your-ai-api-key"
+model_name = "llama3.1:8b"
+timeout = 60
+
+[schedule]
+analysis_times = ["10:00", "15:00", "21:00"]
+enable_auto_analysis = false
+sync_interval_minutes = 15
+
+[notification]
+enable_web_push = true
+enable_email = false
+
+[email]
+smtp_server = "smtp.gmail.com"
+smtp_port = 587
+smtp_username = "your-email@gmail.com"
+smtp_password = "your-app-password"
+from_email = "your-email@gmail.com"
+to_emails = ["recipient@example.com"]

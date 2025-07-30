@@ -1,0 +1,12 @@
+Flask
+Flask-SocketIO
+aiohttp
+requests
+toml
+loguru
+schedule
+email-validator
+python-dateutil
+pytz
+gunicorn
+eventlet

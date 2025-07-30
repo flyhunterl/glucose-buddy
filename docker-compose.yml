@@ -1,0 +1,19 @@
+version: '3.3'
+
+services:
+  nightscout-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nightscout-web-monitor
+    restart: unless-stopped
+    ports:
+      - "1338:1338"
+    volumes:
+      - ./config.toml:/app/config.toml
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_PATH=/app/data/nightscout_data.db
+      - TZ=Asia/Shanghai
