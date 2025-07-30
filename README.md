@@ -6,6 +6,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/flyhunterl/glucose-buddy/pulls)
 
 一个基于 Nightscout 的血糖监控 Web 应用，提供血糖数据可视化、AI 分析和智能通知功能。
+<img width="1467" height="1078" alt="2a2c375caf8cf0db3e2dbf4ae7a68fb" src="https://github.com/user-attachments/assets/6c7b38c5-84d2-4952-9a50-2a66aec0f9b2" />
 
 [English](#english) | [中文](#中文)
 
@@ -246,6 +247,10 @@ tail -f logs/app.log
 2. 提交 [Issue](https://github.com/flyhunterl/glucose-buddy/issues)
 3. 联系开发者：[flynn](https://www.llingfei.com)
 
+## 打赏
+
+**您的打赏能让我在下一顿的泡面里加上一根火腿肠。**
+![20250314_125818_133_copy](https://github.com/user-attachments/assets/33df0129-c322-4b14-8c41-9dc78618e220)
 ---
 
 # English
