@@ -1,6 +1,13 @@
-# 🩺 糖小助
+# 🩺 Glucose Buddy (糖小助)
 
-一个基于Nightscout 血糖监控 Web 应用，提供血糖数据可视化、AI 分析和智能通知功能。
+[![GitHub release](https://img.shields.io/github/release/flyhunterl/glucose-buddy.svg)](https://github.com/flyhunterl/glucose-buddy/releases)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://github.com/flyhunterl/glucose-buddy)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/flyhunterl/glucose-buddy/pulls)
+
+一个基于 Nightscout 的血糖监控 Web 应用，提供血糖数据可视化、AI 分析和智能通知功能。
+
+[English](#english) | [中文](#中文)
 
 ## ✨ 功能特性
 
@@ -235,10 +242,67 @@ tail -f logs/app.log
 ## 📞 支持
 
 如有问题或建议，请：
-1. 查看 [FAQ](docs/FAQ.md)
-2. 提交 [Issue](issues)
+1. 查看 [故障排除指南](TROUBLESHOOTING.md)
+2. 提交 [Issue](https://github.com/flyhunterl/glucose-buddy/issues)
 3. 联系开发者：[flynn](https://www.llingfei.com)
 
 ---
 
-**⚠️ 免责声明**：本应用仅供参考，不能替代专业医疗建议。请在医生指导下管理糖尿病。
+# English
+
+## 🩺 Glucose Buddy
+
+A web-based Nightscout glucose monitoring application with data visualization, AI analysis, and smart notifications.
+
+### ✨ Features
+
+- **📊 Real-time Monitoring**: Fetch glucose data from Nightscout API
+- **📈 Data Visualization**: Interactive charts and data tables
+- **🤖 AI Analysis**: Intelligent glucose pattern analysis with recommendations
+- **🔔 Smart Notifications**: Browser push notifications and email alerts
+- **📱 Mobile-Friendly**: Responsive design with PWA support
+- **⚙️ Easy Configuration**: Web-based configuration interface
+- **🐳 Docker Ready**: One-click deployment with Docker Compose
+
+### 🚀 Quick Start
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/flyhunterl/glucose-buddy.git
+   cd glucose-buddy
+   ```
+
+2. **Configure the application**
+   ```bash
+   cp config.toml.example config.toml
+   # Edit config.toml with your settings
+   ```
+
+3. **Deploy with Docker**
+   ```bash
+   chmod +x quick-start.sh
+   ./quick-start.sh
+   ```
+
+4. **Access the application**
+   - Open http://localhost:1338
+   - Configure your Nightscout settings
+   - Start monitoring!
+
+### 📋 Requirements
+
+- Docker and Docker Compose
+- Nightscout instance with API access
+- Optional: AI service (OpenAI, Ollama, etc.)
+
+### 🤝 Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+**⚠️ Disclaimer**: This application is for informational purposes only and should not replace professional medical advice. Please consult with healthcare professionals for diabetes management.
