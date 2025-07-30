@@ -139,7 +139,8 @@ class NightscoutWebMonitor:
                     insulin REAL,
                     notes TEXT,
                     duration INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(date_string, event_type, carbs, protein, fat)
                 )
             """)
             
@@ -796,6 +797,96 @@ class NightscoutWebMonitor:
 
         return prompt
 
+    async def get_ai_consultation(self, question: str, include_data: bool, days: int = 1) -> str:
+        """获取AI咨询结果"""
+        try:
+            glucose_data = []
+            treatment_data = []
+
+            if include_data:
+                glucose_data = self.get_glucose_data_from_db(days)
+                treatment_data = self.get_treatment_data_from_db(days)
+
+                if not glucose_data:
+                    return "抱歉，没有足够的血糖数据来进行咨询。请先同步数据。"
+
+            prompt = self.get_consultation_prompt(question, glucose_data, treatment_data, days, include_data)
+
+            request_data = {
+                "model": self.config["ai_config"]["model_name"],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 500,
+                "stream": False
+            }
+
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            if self.config["ai_config"]["api_key"]:
+                headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
+                async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if 'choices' in result and len(result['choices']) > 0:
+                            ai_response = result['choices'][0]['message']['content'].strip()
+                            return ai_response
+                        else:
+                            logger.error(f"AI响应格式错误: {result}")
+                            return "AI服务暂时不可用，请稍后再试。"
+                    else:
+                        logger.error(f"AI请求失败: {response.status}")
+                        return "AI服务暂时不可用，请稍后再试。"
+
+        except Exception as e:
+            logger.error(f"获取AI咨询失败: {e}")
+            return "AI服务暂时不可用，建议咨询专业医生获得详细指导。"
+
+    def get_consultation_prompt(self, question: str, glucose_data: List[Dict], treatment_data: List[Dict], days: int, include_data: bool) -> str:
+        """生成AI咨询的prompt"""
+        if include_data:
+            glucose_mmol = []
+            for entry in glucose_data:
+                if entry.get("sgv"):
+                    mmol_value = self.mg_dl_to_mmol_l(entry["sgv"])
+                    shanghai_time = entry.get("shanghai_time", "")
+                    if shanghai_time and len(shanghai_time) >= 16:
+                        shanghai_time = shanghai_time[:16]
+                    glucose_mmol.append({
+                        "time": shanghai_time,
+                        "value": mmol_value
+                    })
+
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。
+
+血糖数据（mmol/L, 最近20条）:
+"""
+            for entry in glucose_mmol[:20]:
+                prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
+
+            prompt += f"""
+用户问题: "{question}"
+
+请用专业、简洁、易懂的语言回答，并提供可行的建议。如果数据不足以回答问题，请明确指出。
+"""
+        else:
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。
+
+用户问题: "{question}"
+
+请用专业、简洁、易懂的语言回答。
+"""
+        return prompt
+
     def send_web_notification(self, title: str, message: str):
         """发送Web推送通知"""
         try:
@@ -1133,15 +1224,50 @@ def api_analysis():
         return jsonify({'error': '暂无血糖数据'}), 404
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, days))
-        loop.close()
-
-        return jsonify({'analysis': analysis})
+        try:
+            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, days))
+            return jsonify({'analysis': analysis})
+        except RuntimeError as e:
+            # 处理在非主线程中运行asyncio.run可能出现的问题
+            if "cannot run loop while another loop is running" in str(e):
+                loop = asyncio.get_event_loop()
+                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, days))
+                return jsonify({'analysis': analysis})
+            else:
+                raise e
     except Exception as e:
         logger.error(f"获取分析失败: {e}")
         return jsonify({'error': '分析服务暂时不可用'}), 500
+
+@app.route('/api/ai-consult', methods=['POST'])
+def api_ai_consult():
+    """AI咨询API"""
+    data = request.get_json()
+    if not data or 'question' not in data:
+        return jsonify({'error': '缺少问题参数'}), 400
+
+    question = data['question']
+    question = data['question']
+    include_data = data.get('include_data', True)
+    try:
+        days = int(data.get('days', 7))
+    except (ValueError, TypeError):
+        days = 7
+
+    try:
+        response = asyncio.run(monitor.get_ai_consultation(question, include_data, days))
+        return jsonify({'response': response})
+    except RuntimeError as e:
+        # 处理在非主线程中运行asyncio.run可能出现的问题
+        if "cannot run loop while another loop is running" in str(e):
+            loop = asyncio.get_event_loop()
+            response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
+            return jsonify({'response': response})
+        else:
+            raise e
+    except Exception as e:
+        logger.error(f"获取AI咨询失败: {e}")
+        return jsonify({'error': 'AI咨询服务暂时不可用'}), 500
 
 @app.route('/api/sync', methods=['POST'])
 def api_sync():

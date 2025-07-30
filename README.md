@@ -6,6 +6,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/flyhunterl/glucose-buddy/pulls)
 
 一个基于 Nightscout 的血糖监控 Web 应用，提供血糖数据可视化、AI 分析和智能通知功能。
+<img width="1467" height="1078" alt="2a2c375caf8cf0db3e2dbf4ae7a68fb" src="https://github.com/user-attachments/assets/6c7b38c5-84d2-4952-9a50-2a66aec0f9b2" />
 
 [English](#english) | [中文](#中文)
 
@@ -31,7 +32,13 @@
 - **Web 配置界面**：友好的配置管理页面
 - **多种通知方式**：支持邮件、浏览器推送
 - **定时任务**：自动数据同步和分析
+  
+###  已知BUG
+- ~~**餐饮记录**：每次同步会新增相同的记录~~
 
+###  更新计划
+- ~~**增加AI咨询功能**~~
+  
 ## 🚀 快速开始
 
 ### 方式一：Docker 部署（推荐）
@@ -246,7 +253,13 @@ tail -f logs/app.log
 2. 提交 [Issue](https://github.com/flyhunterl/glucose-buddy/issues)
 3. 联系开发者：[flynn](https://www.llingfei.com)
 
+## 打赏
+
+**您的打赏能让我在下一顿的泡面里加上一根火腿肠。**
+![20250314_125818_133_copy](https://github.com/user-attachments/assets/33df0129-c322-4b14-8c41-9dc78618e220)
 ---
+
+
 
 # English
 

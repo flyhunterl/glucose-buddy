@@ -28,6 +28,9 @@
                             <button class="btn btn-success btn-sm" onclick="getAnalysis()">
                                 <i class="fas fa-brain"></i> <span class="d-none d-sm-inline">AI分析</span>
                             </button>
+                            <button class="btn btn-warning btn-sm" onclick="openAIConsult()">
+                                <i class="fas fa-comments"></i> <span class="d-none d-sm-inline">AI咨询</span>
+                            </button>
                             <button class="btn btn-info btn-sm" onclick="testConnection()">
                                 <i class="fas fa-link"></i> <span class="d-none d-sm-inline">测试连接</span>
                             </button>
@@ -215,6 +218,52 @@
         </div>
     </div>
 </div>
+
+<!-- AI咨询模态框 -->
+<div class="modal fade" id="consultModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-comments"></i> AI血糖咨询
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="consultQuestion" class="form-label">请输入您的问题：</label>
+                    <textarea class="form-control" id="consultQuestion" rows="3"
+                              placeholder="例如：我今天的血糖波动大吗？应该注意什么？"></textarea>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="includeGlucoseData" checked>
+                        <label class="form-check-label" for="includeGlucoseData">
+                            附带血糖信息作为上下文
+                        </label>
+                    </div>
+                </div>
+                <div id="consult-response" style="display: none;">
+                    <hr>
+                    <h6><i class="fas fa-robot"></i> AI回复：</h6>
+                    <div id="consult-content" class="border rounded p-3 bg-light">
+                        <!-- AI回复内容 -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" onclick="submitConsult()" id="consultSubmitBtn">
+                    <i class="fas fa-paper-plane"></i> 提交咨询
+                </button>
+                <button type="button" class="btn btn-success" onclick="copyConsultResponse()" id="copyConsultBtn" style="display: none;">
+                    <i class="fas fa-copy"></i> 复制回复
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}
@@ -696,6 +745,101 @@
         .finally(() => {
             btn.innerHTML = originalText;
             btn.disabled = false;
+        });
+    }
+
+    // 打开AI咨询模态框
+    function openAIConsult() {
+        const modal = new bootstrap.Modal(document.getElementById('consultModal'));
+        modal.show();
+
+        // 清空之前的内容
+        document.getElementById('consultQuestion').value = '';
+        document.getElementById('consult-response').style.display = 'none';
+        document.getElementById('copyConsultBtn').style.display = 'none';
+        document.getElementById('consultSubmitBtn').disabled = false;
+    }
+
+    // 提交AI咨询
+    function submitConsult() {
+        const question = document.getElementById('consultQuestion').value.trim();
+        const includeData = document.getElementById('includeGlucoseData').checked;
+        const submitBtn = document.getElementById('consultSubmitBtn');
+        const originalText = submitBtn.innerHTML;
+
+        if (!question) {
+            showNotification('请输入您的问题', 'warning');
+            return;
+        }
+
+        // 显示加载状态
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 咨询中...';
+        submitBtn.disabled = true;
+
+        // 显示回复区域
+        document.getElementById('consult-response').style.display = 'block';
+        document.getElementById('consult-content').innerHTML = `
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin"></i> AI正在思考中，请稍候...
+            </div>
+        `;
+
+        // 构建请求数据
+        const requestData = {
+            question: question,
+            include_data: includeData,
+            days: currentDays
+        };
+
+        fetch('/api/ai-consult', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.response) {
+                document.getElementById('consult-content').innerHTML = `
+                    <div class="ai-response">
+                        ${data.response.replace(/\n/g, '<br>')}
+                    </div>
+                `;
+                document.getElementById('copyConsultBtn').style.display = 'inline-block';
+                showNotification('AI咨询完成', 'success');
+            } else {
+                document.getElementById('consult-content').innerHTML = `
+                    <div class="alert alert-danger">
+                        <h6><i class="fas fa-exclamation-triangle"></i> 咨询失败</h6>
+                        <p>${data.error || '未知错误'}</p>
+                    </div>
+                `;
+                showNotification('AI咨询失败: ' + (data.error || '未知错误'), 'danger');
+            }
+        })
+        .catch(error => {
+            document.getElementById('consult-content').innerHTML = `
+                <div class="alert alert-danger">
+                    <h6><i class="fas fa-exclamation-triangle"></i> 咨询失败</h6>
+                    <p>网络错误: ${error.message}</p>
+                </div>
+            `;
+            showNotification('咨询失败: ' + error.message, 'danger');
+        })
+        .finally(() => {
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+        });
+    }
+
+    // 复制AI咨询回复
+    function copyConsultResponse() {
+        const content = document.getElementById('consult-content').innerText;
+        navigator.clipboard.writeText(content).then(() => {
+            showNotification('回复已复制到剪贴板', 'success');
+        }).catch(() => {
+            showNotification('复制失败，请手动选择复制', 'warning');
         });
     }
 </script>

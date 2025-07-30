@@ -70,6 +70,14 @@ else:
     print(f'数据库已存在: {db_path}')
 "
 
+# 清理重复数据（如果存在）
+echo "🧹 检查并清理重复数据..."
+if [ -f "/app/cleanup_duplicates.py" ]; then
+    python cleanup_duplicates.py || echo "⚠️ 数据清理过程中出现警告，但应用将继续启动"
+else
+    echo "📝 清理脚本不存在，跳过数据清理"
+fi
+
 # 检查环境变量
 echo "🔧 检查环境配置..."
 echo "- Flask App: ${FLASK_APP:-app.py}"
