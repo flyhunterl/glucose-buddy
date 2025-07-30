@@ -253,6 +253,12 @@ tail -f logs/app.log
 ![20250314_125818_133_copy](https://github.com/user-attachments/assets/33df0129-c322-4b14-8c41-9dc78618e220)
 ---
 
+###  已知BUG
+- **餐饮记录**：每次同步会新增相同的记录
+
+###  更新计划
+- **增加AI咨询功能**
+
 # English
 
 ## 🩺 Glucose Buddy
