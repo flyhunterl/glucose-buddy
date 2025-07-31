@@ -21,6 +21,9 @@
                             <button type="button" class="btn btn-primary active btn-sm" onclick="loadData(7)">7日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(15)">15日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(30)">30日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(60)">60日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(90)">90日</button>
+                            <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="collapse" data-bs-target="#customDateCollapse">自定义</button>
                         </div>
                     </div>
                     <div class="col-12 col-lg-4">
@@ -38,6 +41,27 @@
                                 <i class="fas fa-sync"></i> <span class="d-none d-sm-inline">同步</span>
                             </button>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自定义日期选择 -->
+    <div class="col-12 mb-4">
+        <div class="collapse" id="customDateCollapse">
+            <div class="card card-body">
+                <div class="row align-items-end">
+                    <div class="col-md-5 mb-2 mb-md-0">
+                        <label for="startDate" class="form-label">开始日期</label>
+                        <input type="date" id="startDate" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-5 mb-2 mb-md-0">
+                        <label for="endDate" class="form-label">结束日期</label>
+                        <input type="date" id="endDate" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-primary btn-sm w-100" onclick="loadCustomDateRange()">查询</button>
                     </div>
                 </div>
             </div>
@@ -273,6 +297,13 @@
     
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
+        // 设置自定义日期选择器的默认值
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('endDate').value = today;
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+        document.getElementById('startDate').value = sevenDaysAgo.toISOString().split('T')[0];
+
         // 先同步数据，然后加载显示
         syncDataAndLoad();
     });
@@ -309,70 +340,85 @@
         });
     }
     
-    // 加载数据
-    function loadData(days = 7) {
-        currentDays = days;
-
-        // 更新按钮状态
-        document.querySelectorAll('.btn-group .btn').forEach(btn => {
+    // 更新按钮激活状态
+    function updateActiveButton(targetButton) {
+        document.querySelectorAll('.btn-group .btn, [data-bs-target="#customDateCollapse"]').forEach(btn => {
             btn.classList.remove('active', 'btn-primary');
-            btn.classList.add('btn-outline-primary');
+            if (!btn.classList.contains('btn-outline-info')) {
+                 btn.classList.add('btn-outline-primary');
+            }
         });
+        
+        if (targetButton) {
+            targetButton.classList.remove('btn-outline-primary', 'btn-outline-info');
+            targetButton.classList.add('btn-primary', 'active');
+        }
+    }
 
-        // 如果有事件对象，更新对应按钮状态
-        if (typeof event !== 'undefined' && event.target) {
-            event.target.classList.remove('btn-outline-primary');
-            event.target.classList.add('btn-primary', 'active');
-        } else {
-            // 页面初始化时，激活对应天数的按钮
-            const buttons = document.querySelectorAll('.btn-group .btn');
-            buttons.forEach((btn, index) => {
-                const btnDays = [1, 3, 7, 15, 30][index];
-                if (btnDays === days) {
-                    btn.classList.remove('btn-outline-primary');
-                    btn.classList.add('btn-primary', 'active');
-                }
-            });
+    // 加载数据（按天数）
+    function loadData(days) {
+        currentDays = days;
+        const url = `?days=${days}`;
+        fetchAndLoadData(url);
+        
+        // 更新按钮状态
+        const buttons = document.querySelectorAll('.btn-group .btn');
+        const btnDays = [1, 3, 7, 15, 30, 60, 90];
+        const buttonIndex = btnDays.indexOf(days);
+        if (buttonIndex !== -1) {
+            updateActiveButton(buttons[buttonIndex]);
+        }
+    }
+
+    // 加载数据（按自定义日期）
+    function loadCustomDateRange() {
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+
+        if (!startDate || !endDate) {
+            showNotification('请选择开始和结束日期', 'warning');
+            return;
+        }
+        if (new Date(startDate) > new Date(endDate)) {
+            showNotification('开始日期不能晚于结束日期', 'warning');
+            return;
         }
 
-        // 加载血糖数据
-        loadGlucoseData(days);
-        // 加载治疗数据
-        loadTreatmentData(days);
+        const url = `?start_date=${startDate}&end_date=${endDate}`;
+        fetchAndLoadData(url);
+        
+        // 更新按钮状态
+        const customButton = document.querySelector('[data-bs-target="#customDateCollapse"]');
+        updateActiveButton(customButton);
     }
-    
-    // 加载血糖数据
-    function loadGlucoseData(days) {
-        fetch(`/api/glucose-data?days=${days}`)
+
+    // 核心数据获取和加载函数
+    function fetchAndLoadData(urlParams) {
+        // 加载血糖数据
+        fetch(`/api/glucose-data${urlParams}`)
             .then(response => response.json())
             .then(data => {
                 updateGlucoseTable(data);
                 updateGlucoseChart(data);
-                loadStatistics(days);
             })
             .catch(error => {
                 console.error('加载血糖数据失败:', error);
                 showNotification('加载血糖数据失败', 'danger');
             });
-    }
 
-    // 加载统计数据
-    function loadStatistics(days) {
-        fetch(`/api/statistics?days=${days}`)
+        // 加载统计数据
+        fetch(`/api/statistics${urlParams}`)
             .then(response => response.json())
             .then(data => {
                 updateStats(data);
             })
             .catch(error => {
                 console.error('加载统计数据失败:', error);
-                // 如果统计API失败，显示默认值
                 updateStats({});
             });
-    }
-    
-    // 加载治疗数据
-    function loadTreatmentData(days) {
-        fetch(`/api/treatment-data?days=${days}`)
+        
+        // 加载治疗数据
+        fetch(`/api/treatment-data${urlParams}`)
             .then(response => response.json())
             .then(data => {
                 updateTreatmentTable(data);

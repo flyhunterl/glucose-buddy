@@ -402,21 +402,34 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"保存治疗数据失败: {e}")
 
-    def get_glucose_data_from_db(self, days: int = 7) -> List[Dict]:
+    def get_glucose_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取血糖数据"""
         try:
             conn = sqlite3.connect("nightscout_data.db")
             cursor = conn.cursor()
 
-            start_date = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+            if start_date and end_date:
+                # 确保结束日期包含全天
+                end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                end_date_str = end_date_dt.strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, sgv, direction, trend
+                    FROM glucose_data
+                    WHERE shanghai_time >= ? AND shanghai_time < ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date, end_date_str)
+            else:
+                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, sgv, direction, trend
+                    FROM glucose_data
+                    WHERE shanghai_time >= ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date_str,)
 
-            cursor.execute("""
-                SELECT date_string, shanghai_time, sgv, direction, trend
-                FROM glucose_data
-                WHERE shanghai_time >= ?
-                ORDER BY date_string DESC
-            """, (start_date,))
-
+            cursor.execute(query, params)
             rows = cursor.fetchall()
             conn.close()
 
@@ -436,21 +449,34 @@ class NightscoutWebMonitor:
             logger.error(f"从数据库获取血糖数据失败: {e}")
             return []
 
-    def get_treatment_data_from_db(self, days: int = 7) -> List[Dict]:
+    def get_treatment_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取治疗数据"""
         try:
             conn = sqlite3.connect("nightscout_data.db")
             cursor = conn.cursor()
 
-            start_date = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+            if start_date and end_date:
+                # 确保结束日期包含全天
+                end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                end_date_str = end_date_dt.strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, event_type, carbs, protein, fat, insulin, notes, duration
+                    FROM treatment_data
+                    WHERE shanghai_time >= ? AND shanghai_time < ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date, end_date_str)
+            else:
+                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, event_type, carbs, protein, fat, insulin, notes, duration
+                    FROM treatment_data
+                    WHERE shanghai_time >= ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date_str,)
 
-            cursor.execute("""
-                SELECT date_string, shanghai_time, event_type, carbs, protein, fat, insulin, notes, duration
-                FROM treatment_data
-                WHERE shanghai_time >= ?
-                ORDER BY date_string DESC
-            """, (start_date,))
-
+            cursor.execute(query, params)
             rows = cursor.fetchall()
             conn.close()
 
@@ -1129,7 +1155,10 @@ def config_page():
 def api_glucose_data():
     """获取血糖数据API"""
     days = request.args.get('days', 7, type=int)
-    glucose_data = monitor.get_glucose_data_from_db(days)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    glucose_data = monitor.get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     # 转换数据格式用于前端显示
     formatted_data = []
@@ -1148,7 +1177,10 @@ def api_glucose_data():
 def api_treatment_data():
     """获取治疗数据API"""
     days = request.args.get('days', 7, type=int)
-    treatment_data = monitor.get_treatment_data_from_db(days)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    treatment_data = monitor.get_treatment_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     # 转换数据格式用于前端显示
     formatted_data = []
@@ -1170,7 +1202,10 @@ def api_treatment_data():
 def api_statistics():
     """获取血糖统计数据API"""
     days = request.args.get('days', 7, type=int)
-    glucose_data = monitor.get_glucose_data_from_db(days)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    glucose_data = monitor.get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     if not glucose_data:
         return jsonify({'error': '暂无血糖数据'}), 404
