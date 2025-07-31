@@ -51,6 +51,52 @@
                         </div>
                     </div>
 
+                    <!-- 个人信息 -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="fas fa-user"></i> 个人信息
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="height-cm" class="form-label">身高 (cm)</label>
+                                        <input type="number" class="form-control" id="height-cm"
+                                               value="{{ config.basic.height_cm }}"
+                                               min="0" step="0.1">
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="weight-kg" class="form-label">体重 (kg)</label>
+                                        <input type="number" class="form-control" id="weight-kg"
+                                               value="{{ config.basic.weight_kg }}"
+                                               min="0" step="0.1">
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label class="form-label">BMI</label>
+                                        <div id="bmi-display" class="form-control-plaintext">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="body-fat" class="form-label">体脂率 (%)</label>
+                                        <input type="number" class="form-control" id="body-fat"
+                                               value="{{ config.basic.body_fat_percentage }}"
+                                               min="0" max="100" step="0.1">
+                                        <div class="form-text">可选，用于更精准的AI分析</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- AI 配置 -->
                     <div class="card mb-4">
                         <div class="card-header">
@@ -296,7 +342,10 @@
         const config = {
             basic: {
                 enable: true,
-                timezone_offset: parseInt(document.getElementById('ns-timezone').value)
+                timezone_offset: parseInt(document.getElementById('ns-timezone').value),
+                height_cm: parseFloat(document.getElementById('height-cm').value) || 0,
+                weight_kg: parseFloat(document.getElementById('weight-kg').value) || 0,
+                body_fat_percentage: parseFloat(document.getElementById('body-fat').value) || 0
             },
             nightscout: {
                 api_url: document.getElementById('ns-api-url').value.trim(),
@@ -433,5 +482,44 @@
             location.reload();
         }
     }
+
+    // BMI 计算和显示
+    function calculateAndDisplayBMI() {
+        const heightInput = document.getElementById('height-cm');
+        const weightInput = document.getElementById('weight-kg');
+        const bmiDisplay = document.getElementById('bmi-display');
+
+        const height = parseFloat(heightInput.value);
+        const weight = parseFloat(weightInput.value);
+
+        if (height > 0 && weight > 0) {
+            const bmi = (weight / ((height / 100) ** 2)).toFixed(1);
+            let status = '';
+            let statusClass = '';
+
+            if (bmi < 18.5) {
+                status = '偏瘦';
+                statusClass = 'text-warning';
+            } else if (bmi < 24) {
+                status = '正常';
+                statusClass = 'text-success';
+            } else if (bmi < 28) {
+                status = '超重';
+                statusClass = 'text-warning';
+            } else {
+                status = '肥胖';
+                statusClass = 'text-danger';
+            }
+            bmiDisplay.innerHTML = `${bmi} <span class="badge ${statusClass}">${status}</span>`;
+        } else {
+            bmiDisplay.textContent = '--';
+        }
+    }
+
+    document.getElementById('height-cm').addEventListener('input', calculateAndDisplayBMI);
+    document.getElementById('weight-kg').addEventListener('input', calculateAndDisplayBMI);
+    
+    // 页面加载时计算一次
+    document.addEventListener('DOMContentLoaded', calculateAndDisplayBMI);
 </script>
 {% endblock %}

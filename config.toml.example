@@ -1,6 +1,9 @@
 [basic]
 enable = true
 timezone_offset = 8
+height_cm = 175
+weight_kg = 70
+body_fat_percentage = 20
 
 [nightscout]
 api_url = "https://your-nightscout-url.herokuapp.com"

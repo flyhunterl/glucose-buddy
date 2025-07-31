@@ -43,7 +43,10 @@ class NightscoutWebMonitor:
         default_config = {
             "basic": {
                 "enable": True,
-                "timezone_offset": 8
+                "timezone_offset": 8,
+                "height_cm": 0,
+                "weight_kg": 0,
+                "body_fat_percentage": 0
             },
             "nightscout": {
                 "api_url": "",
@@ -755,7 +758,19 @@ class NightscoutWebMonitor:
                     "event_type": entry.get("eventType", "")
                 })
 
-        prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。
+        bmi_data = self.calculate_bmi()
+        bmi_data = self.calculate_bmi()
+        body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
+        
+        personal_info = []
+        if bmi_data.get("bmi") > 0:
+            personal_info.append(f"用户BMI为 {bmi_data['bmi']} ({bmi_data['status']})")
+        if body_fat > 0:
+            personal_info.append(f"体脂率为 {body_fat}%")
+        
+        prompt_info = " ".join(personal_info)
+
+        prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info}
 
 血糖数据（mmol/L）：
 """
@@ -879,6 +894,18 @@ class NightscoutWebMonitor:
 
     def get_consultation_prompt(self, question: str, glucose_data: List[Dict], treatment_data: List[Dict], days: int, include_data: bool) -> str:
         """生成AI咨询的prompt"""
+        bmi_data = self.calculate_bmi()
+        bmi_data = self.calculate_bmi()
+        body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
+
+        personal_info = []
+        if bmi_data.get("bmi") > 0:
+            personal_info.append(f"用户BMI为 {bmi_data['bmi']} ({bmi_data['status']})")
+        if body_fat > 0:
+            personal_info.append(f"体脂率为 {body_fat}%")
+            
+        prompt_info = " ".join(personal_info)
+
         if include_data:
             glucose_mmol = []
             for entry in glucose_data:
@@ -892,7 +919,7 @@ class NightscoutWebMonitor:
                         "value": mmol_value
                     })
 
-            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。{prompt_info}
 
 血糖数据（mmol/L, 最近20条）:
 """
@@ -905,7 +932,7 @@ class NightscoutWebMonitor:
 请用专业、简洁、易懂的语言回答，并提供可行的建议。如果数据不足以回答问题，请明确指出。
 """
         else:
-            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。{prompt_info}
 
 用户问题: "{question}"
 
@@ -1136,6 +1163,28 @@ class NightscoutWebMonitor:
                 "success": False,
                 "error": f"邮件配置测试失败: {str(e)}"
             }
+
+    def calculate_bmi(self) -> Dict[str, any]:
+        """计算BMI并返回状态"""
+        height_cm = self.config.get("basic", {}).get("height_cm", 0)
+        weight_kg = self.config.get("basic", {}).get("weight_kg", 0)
+
+        if not height_cm or not weight_kg or height_cm <= 0 or weight_kg <= 0:
+            return {"bmi": 0, "status": "信息不全"}
+
+        height_m = height_cm / 100
+        bmi = round(weight_kg / (height_m ** 2), 1)
+
+        if bmi < 18.5:
+            status = "偏瘦"
+        elif 18.5 <= bmi < 24:
+            status = "正常"
+        elif 24 <= bmi < 28:
+            status = "超重"
+        else:
+            status = "肥胖"
+        
+        return {"bmi": bmi, "status": status}
 
 # 创建全局实例
 monitor = NightscoutWebMonitor()
