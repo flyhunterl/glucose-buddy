@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}血糖详细报告 - Nightscout 血糖监控{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- 报表头部 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-file-medical-alt"></i> 血糖详细报告
+                    </h5>
+                    <div>
+                        <button class="btn btn-primary btn-sm" onclick="window.print()">
+                            <i class="fas fa-print"></i> 打印报告
+                        </button>
+                        <button class="btn btn-secondary btn-sm ms-2" onclick="window.history.back()">
+                            <i class="fas fa-arrow-left"></i> 返回
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>报告日期范围：</strong> <span id="report-date-range">{{ start_date }} 至 {{ end_date }}</span></p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>生成时间：</strong> <span id="report-generation-time">{{ generation_time }}</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计概览 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-chart-bar"></i> 统计概览
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-primary">{{ summary.get('avg_glucose', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">平均血糖 (mmol/L)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-danger">{{ summary.get('max_glucose', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">最高血糖 (mmol/L)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-success">{{ summary.get('min_glucose', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">最低血糖 (mmol/L)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-info">{{ summary.get('hba1c', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">糖化血红蛋白 (%)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-warning">{{ summary.get('cv', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">血糖变异系数 (%)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-success">{{ summary.get('in_range_percentage', '--') if summary else '--' }}%</h4>
+                                <small class="text-muted">目标范围百分比</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-primary">{{ summary.get('postprandial_avg', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">餐后平均血糖 (mmol/L)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-primary">{{ summary.get('fasting_avg', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">空腹平均血糖 (mmol/L)</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 每日血糖表格 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-table"></i> 每日血糖记录
+                    </h6>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>日期</th>
+                                    <th>空腹血糖</th>
+                                    <th>早餐前</th>
+                                    <th>早餐后</th>
+                                    <th>午餐前</th>
+                                    <th>午餐后</th>
+                                    <th>晚餐前</th>
+                                    <th>晚餐后</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for day in daily_data %}
+                                <tr>
+                                    <td>{{ day.get('date', '--') }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('fasting')) }}">{{ day.get('fasting', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('breakfast_before')) }}">{{ day.get('breakfast_before', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('breakfast_after')) }}">{{ day.get('breakfast_after', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('lunch_before')) }}">{{ day.get('lunch_before', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('lunch_after')) }}">{{ day.get('lunch_after', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('dinner_before')) }}">{{ day.get('dinner_before', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('dinner_after')) }}">{{ day.get('dinner_after', '--') or '--' }}</td>
+                                </tr>
+                                {% endfor %}
+                                {% if not daily_data or daily_data|length == 0 %}
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted py-4">
+                                        <i class="fas fa-info-circle"></i> 暂无数据
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 打印样式 -->
+<style>
+@media print {
+    @page {
+        margin: 1cm;
+        size: A4;
+    }
+
+    body {
+        font-size: 10pt;
+        background-color: #fff;
+    }
+    
+    .card {
+        border: 1px solid #dee2e6 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+    }
+    
+    .card-header {
+        background-color: #f8f9fa !important;
+        border-bottom: 1px solid #dee2e6 !important;
+    }
+    
+    .btn, .navbar, footer.footer {
+        display: none !important;
+    }
+    
+    .container-fluid {
+        padding: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    
+    .table {
+        font-size: 9pt;
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .table th,
+    .table td {
+        padding: 0.4rem;
+        border: 1px solid #dee2e6;
+    }
+
+    .print-footer {
+        display: block !important;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: 8pt;
+        color: #6c757d;
+        border-top: 1px solid #dee2e6;
+        padding-top: 5px;
+    }
+}
+
+.print-footer {
+    display: none;
+}
+</style>
+
+<div class="print-footer">
+    <p class="mb-0">糖小助 (Glucose Buddy) | GitHub: <a href="https://github.com/flyhunterl/glucose-buddy">flyhunterl/glucose-buddy</a> | Author: flynn (<a href="https://www.llingfei.com">https://www.llingfei.com</a>)</p>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 设置当前时间为生成时间
+    const now = new Date();
+    const formattedTime = now.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+    document.getElementById('report-generation-time').textContent = formattedTime;
+});
+</script>
+{% endblock %}

@@ -1186,6 +1186,157 @@ class NightscoutWebMonitor:
         
         return {"bmi": bmi, "status": status}
 
+    def generate_report_data(self, start_date: str, end_date: str) -> Dict:
+        """生成血糖详细报告数据"""
+        try:
+            # 获取指定日期范围的数据
+            glucose_data = self.get_glucose_data_from_db(start_date=start_date, end_date=end_date)
+            treatment_data = self.get_treatment_data_from_db(start_date=start_date, end_date=end_date)
+            
+            if not glucose_data:
+                return {
+                    'summary': {},
+                    'daily_data': [],
+                    'error': '暂无血糖数据'
+                }
+
+            # 转换血糖值为mmol/L
+            glucose_values = []
+            glucose_by_date = {}
+            
+            for entry in glucose_data:
+                if entry.get("sgv"):
+                    mmol_value = self.mg_dl_to_mmol_l(entry["sgv"])
+                    glucose_values.append(mmol_value)
+                    
+                    # 按日期分组
+                    date_str = entry.get('shanghai_time', '')[:10]
+                    if date_str not in glucose_by_date:
+                        glucose_by_date[date_str] = []
+                    glucose_by_date[date_str].append({
+                        'time': entry.get('shanghai_time', ''),
+                        'value': mmol_value,
+                        'hour': int(entry.get('shanghai_time', '00:00:00')[11:13])
+                    })
+
+            if not glucose_values:
+                return {
+                    'summary': {},
+                    'daily_data': [],
+                    'error': '血糖数据格式错误'
+                }
+
+            # 计算统计摘要
+            avg_glucose = sum(glucose_values) / len(glucose_values)
+            max_glucose = max(glucose_values)
+            min_glucose = min(glucose_values)
+            
+            # 计算目标范围内比例
+            in_range_count = sum(1 for v in glucose_values if 3.9 <= v <= 10.0)
+            in_range_percentage = (in_range_count / len(glucose_values)) * 100
+            
+            # 计算糖化血红蛋白
+            hba1c_data = self.calculate_estimated_hba1c(glucose_values)
+            hba1c = hba1c_data.get("hba1c_adag_percent", 0)
+            
+            # 计算血糖变异系数
+            cv_data = self.calculate_glucose_cv(glucose_values)
+            cv = cv_data.get("cv_percent", 0)
+
+            # 计算空腹和餐后血糖
+            fasting_values = []
+            postprandial_values = []
+            
+            # 按日期处理数据
+            daily_data = []
+            date_range = []
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            
+            current_dt = start_dt
+            while current_dt <= end_dt:
+                date_str = current_dt.strftime('%Y-%m-%d')
+                date_range.append(date_str)
+                current_dt += timedelta(days=1)
+
+            for date_str in date_range:
+                day_data = {
+                    'date': date_str,
+                    'fasting': None,
+                    'breakfast_before': None,
+                    'breakfast_after': None,
+                    'lunch_before': None,
+                    'lunch_after': None,
+                    'dinner_before': None,
+                    'dinner_after': None
+                }
+
+                if date_str in glucose_by_date:
+                    day_glucose = glucose_by_date[date_str]
+                    
+                    # 空腹血糖：早上6-7点
+                    fasting_values.extend([g['value'] for g in day_glucose if 6 <= g['hour'] < 7])
+                    fasting_glucose = next((g['value'] for g in day_glucose if 6 <= g['hour'] < 7), None)
+                    day_data['fasting'] = fasting_glucose
+                    
+                    # 早餐前：早上6-8点
+                    breakfast_before = next((g['value'] for g in day_glucose if 6 <= g['hour'] < 8), None)
+                    day_data['breakfast_before'] = breakfast_before
+                    
+                    # 早餐后：早餐后2小时（8-10点）
+                    breakfast_after = next((g['value'] for g in day_glucose if 8 <= g['hour'] < 10), None)
+                    if breakfast_after:
+                        postprandial_values.append(breakfast_after)
+                    day_data['breakfast_after'] = breakfast_after
+                    
+                    # 午餐前：11-12点
+                    lunch_before = next((g['value'] for g in day_glucose if 11 <= g['hour'] < 12), None)
+                    day_data['lunch_before'] = lunch_before
+                    
+                    # 午餐后：午餐后2小时（12-14点）
+                    lunch_after = next((g['value'] for g in day_glucose if 12 <= g['hour'] < 14), None)
+                    if lunch_after:
+                        postprandial_values.append(lunch_after)
+                    day_data['lunch_after'] = lunch_after
+                    
+                    # 晚餐前：17-18点
+                    dinner_before = next((g['value'] for g in day_glucose if 17 <= g['hour'] < 18), None)
+                    day_data['dinner_before'] = dinner_before
+                    
+                    # 晚餐后：晚餐后2小时（18-20点）
+                    dinner_after = next((g['value'] for g in day_glucose if 18 <= g['hour'] < 20), None)
+                    if dinner_after:
+                        postprandial_values.append(dinner_after)
+                    day_data['dinner_after'] = dinner_after
+
+                daily_data.append(day_data)
+
+            # 计算空腹和餐后平均血糖
+            fasting_avg = sum(fasting_values) / len(fasting_values) if fasting_values else 0
+            postprandial_avg = sum(postprandial_values) / len(postprandial_values) if postprandial_values else 0
+
+            return {
+                'summary': {
+                    'avg_glucose': round(avg_glucose, 1),
+                    'max_glucose': round(max_glucose, 1),
+                    'min_glucose': round(min_glucose, 1),
+                    'hba1c': round(hba1c, 1),
+                    'cv': round(cv, 1),
+                    'in_range_percentage': round(in_range_percentage, 1),
+                    'fasting_avg': round(fasting_avg, 1),
+                    'postprandial_avg': round(postprandial_avg, 1)
+                },
+                'daily_data': daily_data
+            }
+
+        except Exception as e:
+            logger.error(f"生成报表数据失败: {e}")
+            return {
+                'summary': {},
+                'daily_data': [],
+                'error': str(e)
+            }
+
 # 创建全局实例
 monitor = NightscoutWebMonitor()
 
@@ -1449,6 +1600,91 @@ def api_test_email():
             "success": False,
             "error": f"测试失败: {str(e)}"
         })
+
+def get_glucose_color_class(value):
+    if value is None:
+        return ''
+    try:
+        val = float(value)
+        if val < 3.9:
+            return 'text-warning'
+        elif val > 7.8:
+            return 'text-danger'
+        else:
+            return 'text-success'
+    except (ValueError, TypeError):
+        return ''
+
+@app.context_processor
+def utility_processor():
+    return dict(get_glucose_color_class=get_glucose_color_class)
+
+@app.route('/report')
+def report_page():
+    """报表页面"""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if not start_date or not end_date:
+            # 默认显示最近7天
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d')
+        
+        # 生成报表数据
+        report_data = monitor.generate_report_data(start_date, end_date)
+        
+        # 准备模板上下文
+        context = {
+            'start_date': start_date,
+            'end_date': end_date,
+            'generation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'summary': report_data.get('summary', {}),
+            'daily_data': report_data.get('daily_data', [])
+        }
+        
+        return render_template('report.html', **context)
+        
+    except Exception as e:
+        logger.error(f"报表页面加载失败: {e}")
+        # 返回空数据的报表页面
+        context = {
+            'start_date': start_date or '',
+            'end_date': end_date or '',
+            'generation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'summary': {},
+            'daily_data': []
+        }
+        return render_template('report.html', **context)
+
+@app.route('/api/report-data')
+def api_report_data():
+    """获取报表数据API"""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if not start_date or not end_date:
+            return jsonify({'error': '缺少日期参数'}), 400
+            
+        # 验证日期格式
+        try:
+            datetime.strptime(start_date, '%Y-%m-%d')
+            datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': '日期格式错误，请使用YYYY-MM-DD格式'}), 400
+            
+        # 生成报表数据
+        report_data = monitor.generate_report_data(start_date, end_date)
+        
+        if 'error' in report_data and report_data['error']:
+            return jsonify({'error': report_data['error']}), 404
+            
+        return jsonify(report_data)
+        
+    except Exception as e:
+        logger.error(f"获取报表数据失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # SocketIO 事件处理
 @socketio.on('connect')

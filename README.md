@@ -15,8 +15,10 @@
 ### 📊 数据监控
 - **实时血糖数据**：从 Nightscout API 获取血糖数据
 - **数据可视化**：血糖趋势图表和数据表格
-- **历史数据**：支持查看 1-30 天的历史数据
+- **历史数据**：支持查看 1-90 天的历史数据
 - **统计分析**：平均血糖、目标范围内比例、变异系数等
+- **详细报表**：包含餐前餐后血糖的完整报告表
+- **打印支持**：优化的打印样式，方便保存和分享
 
 ### 🤖 AI 分析
 - **智能分析**：基于 AI 模型的血糖数据分析
@@ -37,11 +39,11 @@
 - ~~**餐饮记录**：每次同步会新增相同的记录~~  已修复
 
 ###  更新计划
-- ~~**增加AI咨询功能**~~ 已完成
-- ~~增加自定义日期范围，增加60、90天周期~~ 已完成
-- 增加包含餐前餐后血糖的详细报告表
-- ~~增加个人身高体重信息配置并计算BMI~~
-- ~~AI分析和咨询增加营养和减脂控糖建议~~
+- ✅ **增加AI咨询功能** - 已完成
+- ✅ **增加自定义日期范围，增加60、90天周期** - 已完成
+- ✅ **增加包含餐前餐后血糖的详细报告表** - 已完成
+- ✅ **增加个人身高体重信息配置并计算BMI** - 已完成
+- ✅ **AI分析和咨询增加营养和减脂控糖建议** - 已完成
 
 
 ## 🚀 快速开始
@@ -168,11 +170,17 @@ nightscout-web/
 ├── templates/            # HTML 模板
 │   ├── base.html
 │   ├── index.html
-│   └── config.html
+│   ├── config.html
+│   └── report.html       # 血糖报表模板
 ├── static/               # 静态文件
 │   ├── sw.js            # Service Worker
 │   ├── manifest.json    # PWA Manifest
 │   └── ...
+├── specs/                # 功能规格文档
+│   └── report-feature/   # 报表功能规格
+│       ├── requirements.md
+│       ├── design.md
+│       └── tasks.md
 ├── Dockerfile           # Docker 镜像
 ├── docker-compose.yml   # Docker 编排
 └── README.md           # 说明文档
@@ -195,6 +203,8 @@ python app.py
 | `/api/config` | GET/POST | 配置管理 |
 | `/api/test-connection` | POST | 测试连接 |
 | `/api/test-email` | POST | 测试邮件 |
+| `/report` | GET | 血糖详细报表页面 |
+| `/api/report-data` | GET | 获取报表数据 |
 
 ## 🔍 故障排除
 

@@ -13,8 +13,8 @@
                 </h5>
             </div>
             <div class="card-body">
-                <div class="row">
-                    <div class="col-12 col-lg-8 mb-3 mb-lg-0">
+                <div class="row align-items-center">
+                    <div class="col-12 col-xl-7 mb-3 mb-xl-0">
                         <div class="btn-group w-100" role="group">
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(1)">今日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(3)">3日</button>
@@ -26,8 +26,11 @@
                             <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="collapse" data-bs-target="#customDateCollapse">自定义</button>
                         </div>
                     </div>
-                    <div class="col-12 col-lg-4">
-                        <div class="d-grid gap-2 d-lg-flex justify-content-lg-end">
+                    <div class="col-12 col-xl-5">
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                            <button class="btn btn-primary btn-sm" onclick="generateReport()">
+                                <i class="fas fa-file-alt"></i> <span class="d-none d-sm-inline">生成报表</span>
+                            </button>
                             <button class="btn btn-success btn-sm" onclick="getAnalysis()">
                                 <i class="fas fa-brain"></i> <span class="d-none d-sm-inline">AI分析</span>
                             </button>
@@ -887,6 +890,33 @@
         }).catch(() => {
             showNotification('复制失败，请手动选择复制', 'warning');
         });
+    }
+
+    // 生成报表
+    function generateReport() {
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        
+        let reportUrl = '/report';
+        
+        if (startDate && endDate) {
+            // 使用自定义日期范围
+            if (new Date(startDate) > new Date(endDate)) {
+                showNotification('开始日期不能晚于结束日期', 'warning');
+                return;
+            }
+            reportUrl += `?start_date=${startDate}&end_date=${endDate}`;
+        } else {
+            // 使用当前天数
+            const today = new Date().toISOString().split('T')[0];
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - (currentDays - 1));
+            const startDateStr = startDate.toISOString().split('T')[0];
+            reportUrl += `?start_date=${startDateStr}&end_date=${today}`;
+        }
+        
+        // 在新窗口打开报表页面
+        window.open(reportUrl, '_blank');
     }
 </script>
 {% endblock %}
