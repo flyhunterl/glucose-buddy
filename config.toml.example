@@ -32,3 +32,7 @@ smtp_username = "your-email@gmail.com"
 smtp_password = "your-app-password"
 from_email = "your-email@gmail.com"
 to_emails = ["recipient@example.com"]
+
+[auth]
+enable = false
+password = "your-secure-password"

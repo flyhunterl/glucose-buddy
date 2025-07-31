@@ -34,6 +34,7 @@
 - **Web 配置界面**：友好的配置管理页面
 - **多种通知方式**：支持邮件、浏览器推送
 - **定时任务**：自动数据同步和分析
+- **安全访问**：支持为整个应用设置密码保护，防止未经授权的访问。
   
 ###  已知BUG
 - ~~**餐饮记录**：每次同步会新增相同的记录~~  已修复
@@ -116,6 +117,11 @@ python app.py
 - **同步间隔**：自动同步数据的间隔时间
 - **分析时间**：每日自动分析的时间点
 - **启用状态**：是否启用自动分析
+
+### 认证配置
+- **启用保护**：在配置页面的“认证配置”中，打开“启用密码保护”开关。
+- **设置密码**：启用保护后，输入新密码并确认。如果将密码字段留空，则不会更改现有密码。
+- **登录**：启用后，访问任何页面都将需要先登录。支持“记住我”功能，可在一段时间内免登录。
 
 ## 📱 PWA 安装
 
@@ -291,6 +297,7 @@ A web-based Nightscout glucose monitoring application with data visualization, A
 - **📱 Mobile-Friendly**: Responsive design with PWA support
 - **⚙️ Easy Configuration**: Web-based configuration interface
 - **🐳 Docker Ready**: One-click deployment with Docker Compose
+- **🔐 Secure Access**: Optional password protection for the entire application.
 
 ### 🚀 Quick Start
 
@@ -316,6 +323,13 @@ A web-based Nightscout glucose monitoring application with data visualization, A
    - Open http://localhost:1338
    - Configure your Nightscout settings
    - Start monitoring!
+
+### ⚙️ Configuration
+
+**Authentication**
+- **Enable Protection**: In the web UI under "Configuration", toggle the "Enable password protection" switch.
+- **Set Password**: Once enabled, set a new password. Leaving the password field blank will not change the existing password.
+- **Login**: When enabled, all pages will require login. A "Remember Me" option is available.
 
 ### 📋 Requirements
 

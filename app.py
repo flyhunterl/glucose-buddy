@@ -22,7 +22,7 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
 
 import aiohttp
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_socketio import SocketIO, emit
 from loguru import logger
 import schedule as schedule_lib
@@ -75,6 +75,10 @@ class NightscoutWebMonitor:
                 "smtp_password": "",
                 "from_email": "",
                 "to_emails": []
+            },
+            "auth": {
+                "enable": False,
+                "password": ""
             }
         }
         
@@ -1340,6 +1344,13 @@ class NightscoutWebMonitor:
 # 创建全局实例
 monitor = NightscoutWebMonitor()
 
+@app.before_request
+def require_login():
+    """在每个请求前检查是否需要登录"""
+    if monitor.config.get('auth', {}).get('enable'):
+        allowed_routes = ['login', 'static']
+        if 'logged_in' not in session and request.endpoint not in allowed_routes:
+            return redirect(url_for('login', next=request.url))
 # Flask 路由
 @app.route('/')
 def index():
@@ -1546,7 +1557,16 @@ def api_config():
     elif request.method == 'POST':
         try:
             new_config = request.json
+            
+            # 如果密码字段为空，则保留旧密码
+            if 'auth' in new_config and 'password' in new_config['auth']:
+                if not new_config['auth']['password']:
+                    new_config['auth']['password'] = monitor.config.get('auth', {}).get('password', '')
+
             if monitor.save_config(new_config):
+                # 重新加载调度器以应用更改
+                schedule_lib.clear()
+                monitor.setup_scheduler()
                 return jsonify({'success': True})
             else:
                 return jsonify({'error': '保存配置失败'}), 500
@@ -1685,6 +1705,38 @@ def api_report_data():
     except Exception as e:
         logger.error(f"获取报表数据失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """登录页面"""
+    if not monitor.config.get('auth', {}).get('enable'):
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        password = request.form.get('password')
+        remember = request.form.get('remember')
+
+        if password == monitor.config.get('auth', {}).get('password'):
+            session['logged_in'] = True
+            if remember:
+                session.permanent = True
+                app.permanent_session_lifetime = timedelta(days=30)
+            else:
+                session.permanent = False
+            
+            next_url = request.args.get('next')
+            return redirect(next_url or url_for('index'))
+        else:
+            flash('密码错误，请重试', 'danger')
+
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """登出"""
+    session.pop('logged_in', None)
+    flash('您已成功登出', 'success')
+    return redirect(url_for('login'))
 
 # SocketIO 事件处理
 @socketio.on('connect')

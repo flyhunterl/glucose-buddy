@@ -297,6 +297,35 @@
                         </div>
                     </div>
 
+                    <!-- 认证配置 -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="fas fa-shield-alt"></i> 认证配置
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="auth-enable" {% if config.auth.enable %}checked{% endif %}>
+                                    <label class="form-check-label" for="auth-enable">启用密码保护</label>
+                                </div>
+                                <div class="form-text">启用后，访问网站需要输入密码。</div>
+                            </div>
+                            <div id="password-fields" style="{% if not config.auth.enable %}display: none;{% endif %}">
+                                <div class="mb-3">
+                                    <label for="auth-password" class="form-label">新密码</label>
+                                    <input type="password" class="form-control" id="auth-password" placeholder="留空则不修改">
+                                    <div class="form-text">设置一个新的访问密码。</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="auth-password-confirm" class="form-label">确认新密码</label>
+                                    <input type="password" class="form-control" id="auth-password-confirm" placeholder="再次输入新密码">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 操作按钮 -->
                     <div class="d-flex justify-content-between">
                         <div>
@@ -325,6 +354,16 @@
 
 {% block extra_scripts %}
 <script>
+    // 认证配置显示/隐藏
+    document.getElementById('auth-enable').addEventListener('change', function() {
+        const passwordFields = document.getElementById('password-fields');
+        if (this.checked) {
+            passwordFields.style.display = 'block';
+        } else {
+            passwordFields.style.display = 'none';
+        }
+    });
+
     // 邮件配置显示/隐藏
     document.getElementById('enable-email').addEventListener('change', function() {
         const emailConfig = document.getElementById('email-config');
@@ -339,7 +378,19 @@
     document.getElementById('config-form').addEventListener('submit', function(e) {
         e.preventDefault();
         
+        const password = document.getElementById('auth-password').value;
+        const passwordConfirm = document.getElementById('auth-password-confirm').value;
+
+        if (password !== passwordConfirm) {
+            showNotification('两次输入的密码不一致', 'danger');
+            return;
+        }
+
         const config = {
+            auth: {
+                enable: document.getElementById('auth-enable').checked,
+                password: password
+            },
             basic: {
                 enable: true,
                 timezone_offset: parseInt(document.getElementById('ns-timezone').value),
