@@ -1859,13 +1859,41 @@ def api_meter_data():
 
     # 转换数据格式用于前端显示
     formatted_data = []
-    for entry in meter_data:
-        # 指尖血糖数据已经是mmol/L单位，无需转换
-        formatted_data.append({
-            'time': entry.get('shanghai_time', ''),
-            'value_mgdl': int(float(entry.get('sgv', 0)) * 18),  # 转换为mg/dL用于显示
-            'value_mmol': float(entry.get('sgv', 0))  # 直接使用mmol/L
-        })
+    try:
+        conn = sqlite3.connect("nightscout_data.db")
+        cursor = conn.cursor()
+
+        for entry in meter_data:
+            # 获取指尖血糖的时间
+            meter_time_str = entry.get('dateString', '')
+            if not meter_time_str:
+                continue
+            
+            # 寻找最接近的CGM血糖值
+            # 使用 julianday 函数来计算时间差
+            query = """
+                SELECT sgv
+                FROM glucose_data
+                ORDER BY ABS(julianday(?) - julianday(date_string))
+                LIMIT 1
+            """
+            cursor.execute(query, (meter_time_str,))
+            closest_cgm_row = cursor.fetchone()
+            
+            cgm_sgv = closest_cgm_row[0] if closest_cgm_row else None
+            cgm_mmol = monitor.mg_dl_to_mmol_l(cgm_sgv) if cgm_sgv is not None else None
+
+            # 指尖血糖数据已经是mmol/L单位，无需转换
+            formatted_data.append({
+                'time': entry.get('shanghai_time', ''),
+                'value_mmol': float(entry.get('sgv', 0)),  # 直接使用mmol/L
+                'cgm_value_mmol': cgm_mmol
+            })
+    except Exception as e:
+        logger.error(f"处理指尖血糖数据时出错: {e}")
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 
     return jsonify(formatted_data)
 

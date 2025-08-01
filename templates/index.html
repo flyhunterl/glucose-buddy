@@ -265,8 +265,8 @@
                             <tr>
                                 <th class="d-none d-sm-table-cell">时间</th>
                                 <th class="d-sm-none">时间/血糖</th>
-                                <th class="d-none d-sm-table-cell">血糖值 (mmol/L)</th>
-                                <th class="d-none d-md-table-cell">血糖值 (mg/dL)</th>
+                                <th class="d-none d-sm-table-cell">血糖值</th>
+                                <th class="d-none d-md-table-cell">同时间CGM血糖值</th>
                             </tr>
                         </thead>
                         <tbody id="meter-table-body">
@@ -692,17 +692,19 @@
         tbody.innerHTML = data.map(item => {
             // 获取血糖值颜色
             const glucoseColor = getGlucoseColor(item.value_mmol);
+            const cgmGlucoseColor = item.cgm_value_mmol ? getGlucoseColor(item.cgm_value_mmol) : 'text-muted';
+            const cgmValueDisplay = item.cgm_value_mmol ? formatGlucoseValue(item.cgm_value_mmol) : 'N/A';
 
             // 移动端合并显示
             const mobileContent = `
-                <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="fw-bold">${item.time.split(' ')[1]}</div>
                         <small class="text-muted">${item.time.split(' ')[0]}</small>
                     </div>
                     <div class="text-end">
-                        <div class="fw-bold ${glucoseColor}">${formatGlucoseValue(item.value_mmol)} mmol/L</div>
-                        <small class="text-muted">${item.value_mgdl} mg/dL</small>
+                        <div class="fw-bold ${glucoseColor}">指尖: ${formatGlucoseValue(item.value_mmol)} mmol/L</div>
+                        <small class="${cgmGlucoseColor}">CGM: ${cgmValueDisplay} mmol/L</small>
                     </div>
                 </div>
             `;
@@ -712,7 +714,7 @@
                     <td class="d-none d-sm-table-cell">${item.time}</td>
                     <td class="d-sm-none">${mobileContent}</td>
                     <td class="d-none d-sm-table-cell ${glucoseColor}">${formatGlucoseValue(item.value_mmol)}</td>
-                    <td class="d-none d-md-table-cell">${item.value_mgdl}</td>
+                    <td class="d-none d-md-table-cell ${cgmGlucoseColor}">${cgmValueDisplay}</td>
                 </tr>
             `;
         }).join('');
