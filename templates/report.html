@@ -185,13 +185,76 @@
                                 {% for day in daily_data %}
                                 <tr>
                                     <td>{{ day.get('date', '--') }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('fasting')) }}">{{ day.get('fasting', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('breakfast_before')) }}">{{ day.get('breakfast_before', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('breakfast_after')) }}">{{ day.get('breakfast_after', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('lunch_before')) }}">{{ day.get('lunch_before', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('lunch_after')) }}">{{ day.get('lunch_after', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('dinner_before')) }}">{{ day.get('dinner_before', '--') or '--' }}</td>
-                                    <td class="{{ get_glucose_color_class(day.get('dinner_after')) }}">{{ day.get('dinner_after', '--') or '--' }}</td>
+                                    <td class="{{ get_glucose_color_class(day.get('fasting')) }}">
+                                        {% if day.get('fasting') %}
+                                            {{ day.get('fasting') }}
+                                            {% if day.get('fasting_meter') %}
+                                                <span class="meter-value">({{ day.get('fasting_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('breakfast_before')) }}">
+                                        {% if day.get('breakfast_before') %}
+                                            {{ day.get('breakfast_before') }}
+                                            {% if day.get('breakfast_before_meter') %}
+                                                <span class="meter-value">({{ day.get('breakfast_before_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('breakfast_after')) }}">
+                                        {% if day.get('breakfast_after') %}
+                                            {{ day.get('breakfast_after') }}
+                                            {% if day.get('breakfast_after_meter') %}
+                                                <span class="meter-value">({{ day.get('breakfast_after_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('lunch_before')) }}">
+                                        {% if day.get('lunch_before') %}
+                                            {{ day.get('lunch_before') }}
+                                            {% if day.get('lunch_before_meter') %}
+                                                <span class="meter-value">({{ day.get('lunch_before_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('lunch_after')) }}">
+                                        {% if day.get('lunch_after') %}
+                                            {{ day.get('lunch_after') }}
+                                            {% if day.get('lunch_after_meter') %}
+                                                <span class="meter-value">({{ day.get('lunch_after_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('dinner_before')) }}">
+                                        {% if day.get('dinner_before') %}
+                                            {{ day.get('dinner_before') }}
+                                            {% if day.get('dinner_before_meter') %}
+                                                <span class="meter-value">({{ day.get('dinner_before_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
+                                    <td class="{{ get_glucose_color_class(day.get('dinner_after')) }}">
+                                        {% if day.get('dinner_after') %}
+                                            {{ day.get('dinner_after') }}
+                                            {% if day.get('dinner_after_meter') %}
+                                                <span class="meter-value">({{ day.get('dinner_after_meter') }})</span>
+                                            {% endif %}
+                                        {% else %}
+                                            --
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% endfor %}
                                 {% if not daily_data or daily_data|length == 0 %}
@@ -203,6 +266,9 @@
                                 {% endif %}
                             </tbody>
                         </table>
+                    </div>
+                    <div class="table-note">
+                        注：括号内的数据来源为指尖血糖仪
                     </div>
                 </div>
             </div>
@@ -366,6 +432,19 @@
 
 .print-footer {
     display: none;
+}
+
+.meter-value {
+    color: #6c757d;
+    font-weight: normal;
+    font-size: 0.9em;
+}
+
+.table-note {
+    font-size: 0.85rem;
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 10px;
 }
 </style>
 

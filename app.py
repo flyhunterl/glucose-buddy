@@ -1579,7 +1579,8 @@ class NightscoutWebMonitor:
                     glucose_by_date[date_str].append({
                         'time': entry.get('shanghai_time', ''),
                         'value': mmol_value,
-                        'hour': int(entry.get('shanghai_time', '00:00:00')[11:13])
+                        'hour': int(entry.get('shanghai_time', '00:00:00')[11:13]),
+                        'timestamp': datetime.strptime(entry.get('shanghai_time', ''), '%Y-%m-%d %H:%M:%S') if entry.get('shanghai_time') else None
                     })
 
             # 处理指尖血糖数据（保持原有单位，确保数据一致性）
@@ -1596,7 +1597,25 @@ class NightscoutWebMonitor:
                         meter_by_date[date_str] = []
                     meter_by_date[date_str].append({
                         'time': entry.get('shanghai_time', ''),
-                        'value': mmol_value
+                        'value': mmol_value,
+                        'hour': int(entry.get('shanghai_time', '00:00:00')[11:13]),
+                        'timestamp': datetime.strptime(entry.get('shanghai_time', ''), '%Y-%m-%d %H:%M:%S') if entry.get('shanghai_time') else None
+                    })
+
+            # 处理餐食数据，用于优化餐后血糖计算
+            meals_by_date = {}
+            for entry in treatment_data:
+                if entry.get("carbs") and entry.get("carbs") > 0:
+                    date_str = entry.get('shanghai_time', '')[:10]
+                    if date_str not in meals_by_date:
+                        meals_by_date[date_str] = []
+                    
+                    hour = int(entry.get('shanghai_time', '00:00:00')[11:13])
+                    meals_by_date[date_str].append({
+                        'time': entry.get('shanghai_time', ''),
+                        'carbs': entry.get("carbs"),
+                        'hour': hour,
+                        'timestamp': datetime.strptime(entry.get('shanghai_time', ''), '%Y-%m-%d %H:%M:%S') if entry.get('shanghai_time') else None
                     })
 
             # 处理运动数据
@@ -1667,12 +1686,19 @@ class NightscoutWebMonitor:
                 day_data = {
                     'date': date_str,
                     'fasting': None,
+                    'fasting_meter': None,
                     'breakfast_before': None,
+                    'breakfast_before_meter': None,
                     'breakfast_after': None,
+                    'breakfast_after_meter': None,
                     'lunch_before': None,
+                    'lunch_before_meter': None,
                     'lunch_after': None,
+                    'lunch_after_meter': None,
                     'dinner_before': None,
+                    'dinner_before_meter': None,
                     'dinner_after': None,
+                    'dinner_after_meter': None,
                     'activities': [],
                     'meter_readings': []
                 }
@@ -1681,9 +1707,10 @@ class NightscoutWebMonitor:
                     day_glucose = glucose_by_date[date_str]
                     
                     # 空腹血糖：早上6-7点
-                    fasting_values.extend([g['value'] for g in day_glucose if 6 <= g['hour'] < 7])
                     fasting_glucose = next((g['value'] for g in day_glucose if 6 <= g['hour'] < 7), None)
                     day_data['fasting'] = fasting_glucose
+                    if fasting_glucose:
+                        fasting_values.append(fasting_glucose)
                     
                     # 早餐前：早上6-8点
                     breakfast_before = next((g['value'] for g in day_glucose if 6 <= g['hour'] < 8), None)
@@ -1699,8 +1726,44 @@ class NightscoutWebMonitor:
                     lunch_before = next((g['value'] for g in day_glucose if 11 <= g['hour'] < 12), None)
                     day_data['lunch_before'] = lunch_before
                     
-                    # 午餐后：午餐后2小时（12-14点）
-                    lunch_after = next((g['value'] for g in day_glucose if 12 <= g['hour'] < 14), None)
+                    # 午餐后：基于实际餐食时间计算
+                    lunch_after = None
+                    if date_str in meals_by_date:
+                        # 查找当天的午餐记录（11-13点之间有碳水摄入的记录）
+                        lunch_meals = [m for m in meals_by_date[date_str] if 11 <= m['hour'] < 13]
+                        if lunch_meals:
+                            # 取最早的午餐记录
+                            lunch_meal = min(lunch_meals, key=lambda x: x['hour'])
+                            if lunch_meal['timestamp']:
+                                # 计算餐后2小时的目标时间
+                                target_time = lunch_meal['timestamp'] + timedelta(hours=2)
+                                target_hour = target_time.hour
+                                
+                                # 获取目标时间前后30分钟内的所有血糖数据
+                                time_window_start = target_time - timedelta(minutes=30)
+                                time_window_end = target_time + timedelta(minutes=30)
+                                
+                                # 从中选择最接近目标时间的血糖值作为餐后血糖
+                                window_glucose = [
+                                    g for g in day_glucose
+                                    if g['timestamp'] and
+                                       time_window_start <= g['timestamp'] <= time_window_end
+                                ]
+                                
+                                if window_glucose:
+                                    # 找到最接近目标时间的血糖值
+                                    lunch_after = min(
+                                        window_glucose,
+                                        key=lambda x: abs(x['timestamp'] - target_time)
+                                    )['value']
+                                else:
+                                    # 如果没有找到，使用原来的逻辑（12-14点）
+                                    lunch_after = next((g['value'] for g in day_glucose if 12 <= g['hour'] < 14), None)
+                    
+                    # 如果没有找到基于餐食时间的餐后血糖，使用原来的逻辑
+                    if lunch_after is None:
+                        lunch_after = next((g['value'] for g in day_glucose if 12 <= g['hour'] < 14), None)
+                    
                     if lunch_after:
                         postprandial_values.append(lunch_after)
                     day_data['lunch_after'] = lunch_after
@@ -1714,6 +1777,71 @@ class NightscoutWebMonitor:
                     if dinner_after:
                         postprandial_values.append(dinner_after)
                     day_data['dinner_after'] = dinner_after
+
+                # 查找对应时间段的指尖血糖数据
+                if date_str in meter_by_date:
+                    day_meter = meter_by_date[date_str]
+                    
+                    # 空腹血糖对应的指尖血糖（6-7点）
+                    fasting_meter = next((m['value'] for m in day_meter if 6 <= m['hour'] < 7), None)
+                    day_data['fasting_meter'] = fasting_meter
+                    
+                    # 早餐前对应的指尖血糖（6-8点）
+                    breakfast_before_meter = next((m['value'] for m in day_meter if 6 <= m['hour'] < 8), None)
+                    day_data['breakfast_before_meter'] = breakfast_before_meter
+                    
+                    # 早餐后对应的指尖血糖（8-10点）
+                    breakfast_after_meter = next((m['value'] for m in day_meter if 8 <= m['hour'] < 10), None)
+                    day_data['breakfast_after_meter'] = breakfast_after_meter
+                    
+                    # 午餐前对应的指尖血糖（11-12点）
+                    lunch_before_meter = next((m['value'] for m in day_meter if 11 <= m['hour'] < 12), None)
+                    day_data['lunch_before_meter'] = lunch_before_meter
+                    
+                    # 午餐后对应的指尖血糖（基于实际餐食时间或12-14点）
+                    lunch_after_meter = None
+                    if date_str in meals_by_date:
+                        # 查找当天的午餐记录（11-13点之间有碳水摄入的记录）
+                        lunch_meals = [m for m in meals_by_date[date_str] if 11 <= m['hour'] < 13]
+                        if lunch_meals:
+                            # 取最早的午餐记录
+                            lunch_meal = min(lunch_meals, key=lambda x: x['hour'])
+                            if lunch_meal['timestamp']:
+                                # 计算餐后2小时的目标时间
+                                target_time = lunch_meal['timestamp'] + timedelta(hours=2)
+                                target_hour = target_time.hour
+                                
+                                # 获取目标时间前后30分钟内的所有指尖血糖数据
+                                time_window_start = target_time - timedelta(minutes=30)
+                                time_window_end = target_time + timedelta(minutes=30)
+                                
+                                # 从中选择最接近目标时间的指尖血糖值
+                                window_meter = [
+                                    m for m in day_meter
+                                    if m['timestamp'] and
+                                       time_window_start <= m['timestamp'] <= time_window_end
+                                ]
+                                
+                                if window_meter:
+                                    # 找到最接近目标时间的指尖血糖值
+                                    lunch_after_meter = min(
+                                        window_meter,
+                                        key=lambda x: abs(x['timestamp'] - target_time)
+                                    )['value']
+                    
+                    # 如果没有找到基于餐食时间的餐后指尖血糖，使用原来的逻辑（12-14点）
+                    if lunch_after_meter is None:
+                        lunch_after_meter = next((m['value'] for m in day_meter if 12 <= m['hour'] < 14), None)
+                    
+                    day_data['lunch_after_meter'] = lunch_after_meter
+                    
+                    # 晚餐前对应的指尖血糖（17-18点）
+                    dinner_before_meter = next((m['value'] for m in day_meter if 17 <= m['hour'] < 18), None)
+                    day_data['dinner_before_meter'] = dinner_before_meter
+                    
+                    # 晚餐后对应的指尖血糖（18-20点）
+                    dinner_after_meter = next((m['value'] for m in day_meter if 18 <= m['hour'] < 20), None)
+                    day_data['dinner_after_meter'] = dinner_after_meter
 
                 # 添加当天的运动数据
                 if date_str in activity_by_date:
