@@ -17,10 +17,7 @@
     <link rel="manifest" href="/static/manifest.json">
 
     <!-- Icons -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/icon-16.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="/static/icon-180.png">
-    <link rel="mask-icon" href="/static/icon.svg" color="#007bff">
+    <link rel="icon" href="{{ url_for('static', filename='ico.png') }}">
 
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -87,7 +84,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="fas fa-heartbeat"></i> 糖小助
+                <img src="{{ url_for('static', filename='ico.png') }}" alt="Logo" style="height: 24px; margin-right: 5px;"> 糖小助
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
