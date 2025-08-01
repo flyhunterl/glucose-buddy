@@ -150,6 +150,32 @@ class NightscoutWebMonitor:
                     UNIQUE(date_string, event_type, carbs, protein, fat)
                 )
             """)
+
+            # 创建运动数据表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS activity_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date_string TEXT NOT NULL,
+                    shanghai_time TEXT,
+                    event_type TEXT,
+                    duration INTEGER,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(date_string, event_type, duration)
+                )
+            """)
+
+            # 创建指尖血糖数据表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS meter_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date_string TEXT NOT NULL,
+                    shanghai_time TEXT,
+                    sgv INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(date_string)
+                )
+            """)
             
             # 创建用户订阅表（用于Web推送）
             cursor.execute("""
@@ -215,11 +241,13 @@ class NightscoutWebMonitor:
             logger.error(f"时区转换失败: {utc_time_str}, 错误: {e}")
             return utc_time_str
 
-    async def fetch_nightscout_data(self, start_date: str, end_date: str) -> Tuple[List[Dict], List[Dict]]:
+    async def fetch_nightscout_data(self, start_date: str, end_date: str) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
         """从Nightscout获取指定时间范围的数据"""
         try:
             entries_url = f"{self.config['nightscout']['api_url']}/api/v1/entries.json"
             treatments_url = f"{self.config['nightscout']['api_url']}/api/v1/treatments.json"
+            activity_url = f"{self.config['nightscout']['api_url']}/api/v1/activity.json"
+            meter_url = f"{self.config['nightscout']['api_url']}/api/v1/meter.json"
 
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d')
@@ -265,11 +293,73 @@ class NightscoutWebMonitor:
                         logger.error(f"获取治疗数据失败: {response.status}")
                         treatment_data = []
 
-            return glucose_data, treatment_data
+                # 尝试从 activity.json 获取运动数据
+                try:
+                    async with session.get(activity_url, params=treatment_params, headers=headers) as response:
+                        if response.status == 200:
+                            activity_data = await response.json()
+                            logger.info(f"获取到 {len(activity_data)} 条运动数据")
+                        else:
+                            logger.warning(f"获取运动数据失败: {response.status}，将从治疗数据中识别")
+                            activity_data = []
+                except Exception as e:
+                    logger.warning(f"获取运动数据异常: {e}，将从治疗数据中识别")
+                    activity_data = []
+
+                # 尝试从 meter.json 获取指尖血糖数据
+                try:
+                    async with session.get(meter_url, params=params, headers=headers) as response:
+                        if response.status == 200:
+                            meter_data = await response.json()
+                            logger.info(f"获取到 {len(meter_data)} 条指尖血糖数据")
+                        else:
+                            logger.warning(f"获取指尖血糖数据失败: {response.status}，将从治疗数据中识别")
+                            meter_data = []
+                except Exception as e:
+                    logger.warning(f"获取指尖血糖数据异常: {e}，将从治疗数据中识别")
+                    meter_data = []
+
+            # 从治疗数据中识别运动和指尖血糖数据
+            filtered_activity_data = []
+            filtered_meter_data = []
+            
+            for item in treatment_data:
+                event_type = item.get('eventType', '')
+                notes = item.get('notes', '').lower()
+                
+                # 识别运动数据
+                if event_type == 'Exercise' or '运动' in notes or '锻炼' in notes or '跑步' in notes or '乒乓球' in notes or '篮球' in notes or '游泳' in notes:
+                    filtered_activity_data.append({
+                        'created_at': item.get('created_at', ''),
+                        'eventType': event_type or '运动',
+                        'duration': item.get('duration', 0),
+                        'notes': item.get('notes', '')
+                    })
+                
+                # 识别指尖血糖数据（BG Check事件中的glucose值已经是mmol/L单位）
+                if event_type == 'BG Check':
+                    glucose_value = item.get('glucose', 0)
+                    # 确保数值是合理的mmol/L范围
+                    if glucose_value and float(glucose_value) > 0:
+                        filtered_meter_data.append({
+                            'dateString': item.get('created_at', ''),
+                            'sgv': float(glucose_value)
+                        })
+
+            # 如果专用端点没有数据，使用过滤后的数据
+            if not activity_data and filtered_activity_data:
+                activity_data = filtered_activity_data
+                logger.info(f"从治疗数据中识别到 {len(activity_data)} 条运动数据")
+            
+            if not meter_data and filtered_meter_data:
+                meter_data = filtered_meter_data
+                logger.info(f"从治疗数据中识别到 {len(meter_data)} 条指尖血糖数据")
+
+            return glucose_data, treatment_data, activity_data, meter_data
 
         except Exception as e:
             logger.error(f"获取Nightscout数据失败: {e}")
-            return [], []
+            return [], [], [], []
 
     def scheduled_analysis(self):
         """定时分析任务"""
@@ -288,13 +378,19 @@ class NightscoutWebMonitor:
     async def perform_analysis_and_notify(self):
         """执行分析并发送通知"""
         today = datetime.now().strftime('%Y-%m-%d')
-        glucose_data, treatment_data = await self.fetch_nightscout_data(today, today)
+        glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(today, today)
         
         if glucose_data:
             await self.save_glucose_data(glucose_data)
+        if treatment_data:
             await self.save_treatment_data(treatment_data)
-            
-            analysis = await self.get_ai_analysis(glucose_data, treatment_data, 1)
+        if activity_data:
+            await self.save_activity_data(activity_data)
+        if meter_data:
+            await self.save_meter_data(meter_data)
+
+        if glucose_data:
+            analysis = await self.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1)
             
             # 发送Web推送通知
             if self.config["notification"]["enable_web_push"]:
@@ -309,12 +405,16 @@ class NightscoutWebMonitor:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(hours=2)).strftime('%Y-%m-%d')
         
-        glucose_data, treatment_data = await self.fetch_nightscout_data(start_date, end_date)
+        glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(start_date, end_date)
         
         if glucose_data:
             await self.save_glucose_data(glucose_data)
         if treatment_data:
             await self.save_treatment_data(treatment_data)
+        if activity_data:
+            await self.save_activity_data(activity_data)
+        if meter_data:
+            await self.save_meter_data(meter_data)
 
     async def save_glucose_data(self, glucose_data: List[Dict]):
         """保存血糖数据到数据库"""
@@ -408,6 +508,78 @@ class NightscoutWebMonitor:
 
         except Exception as e:
             logger.error(f"保存治疗数据失败: {e}")
+
+    async def save_activity_data(self, activity_data: List[Dict]):
+        """保存运动数据到数据库"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for entry in activity_data:
+                try:
+                    utc_time = entry.get("created_at") or entry.get("timestamp") or ""
+                    shanghai_time = self.utc_to_shanghai_time(utc_time)
+
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO activity_data
+                        (date_string, shanghai_time, event_type, duration, notes)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        utc_time,
+                        shanghai_time,
+                        entry.get("eventType", ""),
+                        entry.get("duration", 0),
+                        entry.get("notes", "")
+                    ))
+
+                    if cursor.rowcount > 0:
+                        saved_count += 1
+
+                except Exception as e:
+                    logger.error(f"保存运动数据项失败: {e}")
+
+            conn.commit()
+            conn.close()
+            logger.info(f"保存了 {saved_count} 条新的运动数据")
+
+        except Exception as e:
+            logger.error(f"保存运动数据失败: {e}")
+
+    async def save_meter_data(self, meter_data: List[Dict]):
+        """保存指尖血糖数据到数据库"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+
+            saved_count = 0
+            for entry in meter_data:
+                try:
+                    utc_time = entry.get("dateString", "")
+                    shanghai_time = self.utc_to_shanghai_time(utc_time)
+
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO meter_data
+                        (date_string, shanghai_time, sgv)
+                        VALUES (?, ?, ?)
+                    """, (
+                        entry.get("dateString"),
+                        shanghai_time,
+                        entry.get("sgv")
+                    ))
+
+                    if cursor.rowcount > 0:
+                        saved_count += 1
+
+                except Exception as e:
+                    logger.error(f"保存指尖血糖数据项失败: {e}")
+
+            conn.commit()
+            conn.close()
+            logger.info(f"保存了 {saved_count} 条新的指尖血糖数据")
+
+        except Exception as e:
+            logger.error(f"保存指尖血糖数据失败: {e}")
 
     def get_glucose_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取血糖数据"""
@@ -507,10 +679,100 @@ class NightscoutWebMonitor:
             logger.error(f"从数据库获取治疗数据失败: {e}")
             return []
 
-    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], days: int = 1) -> str:
+    def get_activity_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
+        """从数据库获取运动数据"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+
+            if start_date and end_date:
+                end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                end_date_str = end_date_dt.strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, event_type, duration, notes
+                    FROM activity_data
+                    WHERE shanghai_time >= ? AND shanghai_time < ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date, end_date_str)
+            else:
+                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, event_type, duration, notes
+                    FROM activity_data
+                    WHERE shanghai_time >= ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date_str,)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
+
+            activity_data = []
+            for row in rows:
+                activity_data.append({
+                    "created_at": row[0],
+                    "shanghai_time": row[1],
+                    "eventType": row[2],
+                    "duration": row[3],
+                    "notes": row[4]
+                })
+
+            return activity_data
+
+        except Exception as e:
+            logger.error(f"从数据库获取运动数据失败: {e}")
+            return []
+
+    def get_meter_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
+        """从数据库获取指尖血糖数据"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+
+            if start_date and end_date:
+                end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                end_date_str = end_date_dt.strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, sgv
+                    FROM meter_data
+                    WHERE shanghai_time >= ? AND shanghai_time < ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date, end_date_str)
+            else:
+                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                query = """
+                    SELECT date_string, shanghai_time, sgv
+                    FROM meter_data
+                    WHERE shanghai_time >= ?
+                    ORDER BY date_string DESC
+                """
+                params = (start_date_str,)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
+
+            meter_data = []
+            for row in rows:
+                meter_data.append({
+                    "dateString": row[0],
+                    "shanghai_time": row[1],
+                    "sgv": row[2]
+                })
+
+            return meter_data
+
+        except Exception as e:
+            logger.error(f"从数据库获取指尖血糖数据失败: {e}")
+            return []
+
+    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
         """获取AI分析结果"""
         try:
-            prompt = self.get_analysis_prompt(glucose_data, treatment_data, days)
+            prompt = self.get_analysis_prompt(glucose_data, treatment_data, activity_data, meter_data, days)
 
             request_data = {
                 "model": self.config["ai_config"]["model_name"],
@@ -700,7 +962,7 @@ class NightscoutWebMonitor:
 
         return basic_stats
 
-    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], days: int = 1) -> str:
+    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
         """生成AI分析的prompt"""
 
         # 转换血糖数据为mmol/L并转换时区
@@ -716,6 +978,20 @@ class NightscoutWebMonitor:
                     "value": mmol_value,
                     "direction": entry.get("direction", ""),
                     "trend": entry.get("trend", 0)
+                })
+
+        # 转换指尖血糖数据（指尖血糖数据已经是mmol/L单位，无需转换）
+        meter_mmol = []
+        for entry in meter_data:
+            if entry.get("sgv"):
+                # 指尖血糖数据已经是mmol/L单位，直接使用
+                mmol_value = float(entry["sgv"])
+                shanghai_time = entry.get("shanghai_time", "")
+                if shanghai_time and len(shanghai_time) >= 16:
+                    shanghai_time = shanghai_time[:16]
+                meter_mmol.append({
+                    "time": shanghai_time,
+                    "value": mmol_value
                 })
 
         # 分析餐食和营养数据
@@ -762,7 +1038,24 @@ class NightscoutWebMonitor:
                     "event_type": entry.get("eventType", "")
                 })
 
-        bmi_data = self.calculate_bmi()
+        # 分析运动数据
+        activities = []
+        total_duration = 0
+        for entry in activity_data:
+            shanghai_time = entry.get("shanghai_time", "")
+            if shanghai_time and len(shanghai_time) >= 16:
+                shanghai_time = shanghai_time[:16]
+            
+            duration = entry.get("duration", 0)
+            total_duration += duration
+            
+            activities.append({
+                "time": shanghai_time,
+                "event_type": entry.get("eventType", ""),
+                "duration": duration,
+                "notes": entry.get("notes", "")
+            })
+
         bmi_data = self.calculate_bmi()
         body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
         
@@ -793,6 +1086,12 @@ class NightscoutWebMonitor:
 
             prompt += f"• {entry['time']}: {entry['value']} mmol/L {direction_symbol}\n"
 
+        # 添加指尖血糖数据
+        if meter_mmol:
+            prompt += f"\n指尖血糖数据（mmol/L）：\n"
+            for entry in meter_mmol[:10]:
+                prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
+
         if meals:
             prompt += f"\n餐食记录（总碳水: {carbs_total}g, 总蛋白质: {protein_total}g, 总脂肪: {fat_total}g）：\n"
 
@@ -810,6 +1109,16 @@ class NightscoutWebMonitor:
                 prompt += f"• {meal['time']}: {nutrition_info} {event_info}{notes_info}\n"
         else:
             prompt += f"\n餐食记录：无碳水摄入记录\n"
+
+        # 添加运动数据
+        if activities:
+            prompt += f"\n运动记录（总时长: {total_duration}分钟）：\n"
+            for activity in activities[:10]:
+                event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
+                notes_info = f" - {activity['notes']}" if activity['notes'] else ""
+                prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
+        else:
+            prompt += f"\n运动记录：无运动记录\n"
 
         # 计算统计数据
         if glucose_mmol:
@@ -829,14 +1138,17 @@ class NightscoutWebMonitor:
 • 最低血糖：{min_glucose:.1f} mmol/L
 • 目标范围内比例：{in_range_percentage:.1f}% ({in_range_count}/{len(values)})
 • 总测量次数：{len(values)}次
+• 指尖血糖记录：{len(meter_mmol)}次
+• 运动记录：{len(activities)}次
 
 请提供以下分析：
 1. 血糖控制状况评估
 2. 血糖波动模式分析
 3. 餐后血糖反应评估
 4. 营养摄入分析
-5. 具体的改善建议
-6. 需要关注的风险点
+5. 运动对血糖的影响分析
+6. 具体的改善建议
+7. 需要关注的风险点
 
 请用专业但易懂的语言回答，控制在400字以内。"""
 
@@ -847,15 +1159,19 @@ class NightscoutWebMonitor:
         try:
             glucose_data = []
             treatment_data = []
+            activity_data = []
+            meter_data = []
 
             if include_data:
                 glucose_data = self.get_glucose_data_from_db(days)
                 treatment_data = self.get_treatment_data_from_db(days)
+                activity_data = self.get_activity_data_from_db(days)
+                meter_data = self.get_meter_data_from_db(days)
 
                 if not glucose_data:
                     return "抱歉，没有足够的血糖数据来进行咨询。请先同步数据。"
 
-            prompt = self.get_consultation_prompt(question, glucose_data, treatment_data, days, include_data)
+            prompt = self.get_consultation_prompt(question, glucose_data, treatment_data, activity_data, meter_data, days, include_data)
 
             request_data = {
                 "model": self.config["ai_config"]["model_name"],
@@ -896,9 +1212,8 @@ class NightscoutWebMonitor:
             logger.error(f"获取AI咨询失败: {e}")
             return "AI服务暂时不可用，建议咨询专业医生获得详细指导。"
 
-    def get_consultation_prompt(self, question: str, glucose_data: List[Dict], treatment_data: List[Dict], days: int, include_data: bool) -> str:
+    def get_consultation_prompt(self, question: str, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int, include_data: bool) -> str:
         """生成AI咨询的prompt"""
-        bmi_data = self.calculate_bmi()
         bmi_data = self.calculate_bmi()
         body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
 
@@ -923,12 +1238,52 @@ class NightscoutWebMonitor:
                         "value": mmol_value
                     })
 
+            # 转换指尖血糖数据（指尖血糖数据已经是mmol/L单位，无需转换）
+            meter_mmol = []
+            for entry in meter_data:
+                if entry.get("sgv"):
+                    # 指尖血糖数据已经是mmol/L单位，直接使用
+                    mmol_value = float(entry["sgv"])
+                    shanghai_time = entry.get("shanghai_time", "")
+                    if shanghai_time and len(shanghai_time) >= 16:
+                        shanghai_time = shanghai_time[:16]
+                    meter_mmol.append({
+                        "time": shanghai_time,
+                        "value": mmol_value
+                    })
+
+            # 分析运动数据
+            activities = []
+            for entry in activity_data:
+                shanghai_time = entry.get("shanghai_time", "")
+                if shanghai_time and len(shanghai_time) >= 16:
+                    shanghai_time = shanghai_time[:16]
+                
+                activities.append({
+                    "time": shanghai_time,
+                    "event_type": entry.get("eventType", ""),
+                    "duration": entry.get("duration", 0),
+                    "notes": entry.get("notes", "")
+                })
+
             prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。{prompt_info}
 
 血糖数据（mmol/L, 最近20条）:
 """
             for entry in glucose_mmol[:20]:
                 prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
+
+            if meter_mmol:
+                prompt += f"\n指尖血糖数据（mmol/L, 最近10条）:\n"
+                for entry in meter_mmol[:10]:
+                    prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
+
+            if activities:
+                prompt += f"\n运动数据（最近10条）:\n"
+                for activity in activities[:10]:
+                    event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
+                    notes_info = f" - {activity['notes']}" if activity['notes'] else ""
+                    prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
 
             prompt += f"""
 用户问题: "{question}"
@@ -1196,11 +1551,15 @@ class NightscoutWebMonitor:
             # 获取指定日期范围的数据
             glucose_data = self.get_glucose_data_from_db(start_date=start_date, end_date=end_date)
             treatment_data = self.get_treatment_data_from_db(start_date=start_date, end_date=end_date)
+            activity_data = self.get_activity_data_from_db(start_date=start_date, end_date=end_date)
+            meter_data = self.get_meter_data_from_db(start_date=start_date, end_date=end_date)
             
             if not glucose_data:
                 return {
                     'summary': {},
                     'daily_data': [],
+                    'activity_data': [],
+                    'meter_data': [],
                     'error': '暂无血糖数据'
                 }
 
@@ -1223,10 +1582,47 @@ class NightscoutWebMonitor:
                         'hour': int(entry.get('shanghai_time', '00:00:00')[11:13])
                     })
 
+            # 处理指尖血糖数据（保持原有单位，确保数据一致性）
+            meter_values = []
+            meter_by_date = {}
+            for entry in meter_data:
+                if entry.get("sgv"):
+                    # 确保指尖血糖数据以mmol/L单位处理
+                    mmol_value = float(entry["sgv"])
+                    meter_values.append(mmol_value)
+                    
+                    date_str = entry.get('shanghai_time', '')[:10]
+                    if date_str not in meter_by_date:
+                        meter_by_date[date_str] = []
+                    meter_by_date[date_str].append({
+                        'time': entry.get('shanghai_time', ''),
+                        'value': mmol_value
+                    })
+
+            # 处理运动数据
+            activity_by_date = {}
+            total_activity_duration = 0
+            for entry in activity_data:
+                date_str = entry.get('shanghai_time', '')[:10]
+                if date_str not in activity_by_date:
+                    activity_by_date[date_str] = []
+                
+                duration = entry.get('duration', 0)
+                total_activity_duration += duration
+                
+                activity_by_date[date_str].append({
+                    'time': entry.get('shanghai_time', ''),
+                    'event_type': entry.get('eventType', ''),
+                    'duration': duration,
+                    'notes': entry.get('notes', '')
+                })
+
             if not glucose_values:
                 return {
                     'summary': {},
                     'daily_data': [],
+                    'activity_data': activity_data,
+                    'meter_data': meter_data,
                     'error': '血糖数据格式错误'
                 }
 
@@ -1246,6 +1642,10 @@ class NightscoutWebMonitor:
             # 计算血糖变异系数
             cv_data = self.calculate_glucose_cv(glucose_values)
             cv = cv_data.get("cv_percent", 0)
+
+            # 计算指尖血糖统计
+            meter_avg = sum(meter_values) / len(meter_values) if meter_values else 0
+            meter_count = len(meter_values)
 
             # 计算空腹和餐后血糖
             fasting_values = []
@@ -1272,7 +1672,9 @@ class NightscoutWebMonitor:
                     'lunch_before': None,
                     'lunch_after': None,
                     'dinner_before': None,
-                    'dinner_after': None
+                    'dinner_after': None,
+                    'activities': [],
+                    'meter_readings': []
                 }
 
                 if date_str in glucose_by_date:
@@ -1313,6 +1715,14 @@ class NightscoutWebMonitor:
                         postprandial_values.append(dinner_after)
                     day_data['dinner_after'] = dinner_after
 
+                # 添加当天的运动数据
+                if date_str in activity_by_date:
+                    day_data['activities'] = activity_by_date[date_str]
+
+                # 添加当天的指尖血糖数据
+                if date_str in meter_by_date:
+                    day_data['meter_readings'] = meter_by_date[date_str]
+
                 daily_data.append(day_data)
 
             # 计算空腹和餐后平均血糖
@@ -1328,9 +1738,15 @@ class NightscoutWebMonitor:
                     'cv': round(cv, 1),
                     'in_range_percentage': round(in_range_percentage, 1),
                     'fasting_avg': round(fasting_avg, 1),
-                    'postprandial_avg': round(postprandial_avg, 1)
+                    'postprandial_avg': round(postprandial_avg, 1),
+                    'meter_avg': round(meter_avg, 1),
+                    'meter_count': meter_count,
+                    'total_activity_duration': total_activity_duration,
+                    'activity_count': len(activity_data)
                 },
-                'daily_data': daily_data
+                'daily_data': daily_data,
+                'activity_data': activity_data,
+                'meter_data': meter_data
             }
 
         except Exception as e:
@@ -1338,6 +1754,8 @@ class NightscoutWebMonitor:
             return {
                 'summary': {},
                 'daily_data': [],
+                'activity_data': [],
+                'meter_data': [],
                 'error': str(e)
             }
 
@@ -1409,6 +1827,48 @@ def api_treatment_data():
 
     return jsonify(formatted_data)
 
+@app.route('/api/activity-data')
+def api_activity_data():
+    """获取运动数据API"""
+    days = request.args.get('days', 7, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    activity_data = monitor.get_activity_data_from_db(days=days, start_date=start_date, end_date=end_date)
+
+    # 转换数据格式用于前端显示
+    formatted_data = []
+    for entry in activity_data:
+        formatted_data.append({
+            'time': entry.get('shanghai_time', ''),
+            'event_type': entry.get('eventType', ''),
+            'duration': entry.get('duration', 0),
+            'notes': entry.get('notes', '')
+        })
+
+    return jsonify(formatted_data)
+
+@app.route('/api/meter-data')
+def api_meter_data():
+    """获取指尖血糖数据API"""
+    days = request.args.get('days', 7, type=int)
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    meter_data = monitor.get_meter_data_from_db(days=days, start_date=start_date, end_date=end_date)
+
+    # 转换数据格式用于前端显示
+    formatted_data = []
+    for entry in meter_data:
+        # 指尖血糖数据已经是mmol/L单位，无需转换
+        formatted_data.append({
+            'time': entry.get('shanghai_time', ''),
+            'value_mgdl': int(float(entry.get('sgv', 0)) * 18),  # 转换为mg/dL用于显示
+            'value_mmol': float(entry.get('sgv', 0))  # 直接使用mmol/L
+        })
+
+    return jsonify(formatted_data)
+
 @app.route('/api/statistics')
 def api_statistics():
     """获取血糖统计数据API"""
@@ -1465,19 +1925,21 @@ def api_analysis():
 
     glucose_data = monitor.get_glucose_data_from_db(days)
     treatment_data = monitor.get_treatment_data_from_db(days)
+    activity_data = monitor.get_activity_data_from_db(days)
+    meter_data = monitor.get_meter_data_from_db(days)
 
     if not glucose_data:
         return jsonify({'error': '暂无血糖数据'}), 404
 
     try:
         try:
-            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, days))
+            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
             return jsonify({'analysis': analysis})
         except RuntimeError as e:
             # 处理在非主线程中运行asyncio.run可能出现的问题
             if "cannot run loop while another loop is running" in str(e):
                 loop = asyncio.get_event_loop()
-                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, days))
+                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
                 return jsonify({'analysis': analysis})
             else:
                 raise e
@@ -1527,7 +1989,7 @@ def api_sync():
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
 
-        glucose_data, treatment_data = loop.run_until_complete(
+        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
             monitor.fetch_nightscout_data(start_date, end_date)
         )
 
@@ -1535,13 +1997,19 @@ def api_sync():
             loop.run_until_complete(monitor.save_glucose_data(glucose_data))
         if treatment_data:
             loop.run_until_complete(monitor.save_treatment_data(treatment_data))
+        if activity_data:
+            loop.run_until_complete(monitor.save_activity_data(activity_data))
+        if meter_data:
+            loop.run_until_complete(monitor.save_meter_data(meter_data))
 
         loop.close()
 
         return jsonify({
             'success': True,
             'glucose_count': len(glucose_data),
-            'treatment_count': len(treatment_data)
+            'treatment_count': len(treatment_data),
+            'activity_count': len(activity_data),
+            'meter_count': len(meter_data)
         })
 
     except Exception as e:
@@ -1583,18 +2051,20 @@ def api_test_connection():
 
         # 测试获取最近1天的数据
         today = datetime.now().strftime('%Y-%m-%d')
-        glucose_data, treatment_data = loop.run_until_complete(
+        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
             monitor.fetch_nightscout_data(today, today)
         )
 
         loop.close()
 
-        if glucose_data or treatment_data:
+        if glucose_data or treatment_data or activity_data or meter_data:
             return jsonify({
                 'success': True,
                 'message': 'Nightscout连接正常',
                 'glucose_count': len(glucose_data),
-                'treatment_count': len(treatment_data)
+                'treatment_count': len(treatment_data),
+                'activity_count': len(activity_data),
+                'meter_count': len(meter_data)
             })
         else:
             return jsonify({

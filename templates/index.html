@@ -217,6 +217,70 @@
             </div>
         </div>
     </div>
+
+    <!-- 运动数据表格 -->
+    <div class="col-12 col-xl-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-running"></i> 运动记录
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="sticky-header">
+                            <tr>
+                                <th class="d-none d-sm-table-cell">时间</th>
+                                <th class="d-sm-none">时间/运动</th>
+                                <th class="d-none d-sm-table-cell">运动类型</th>
+                                <th class="d-none d-md-table-cell">时长/备注</th>
+                            </tr>
+                        </thead>
+                        <tbody id="activity-table-body">
+                            <tr>
+                                <td colspan="3" class="loading">
+                                    <i class="fas fa-spinner fa-spin"></i> 加载中...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 指尖血糖数据表格 -->
+    <div class="col-12 col-xl-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-tint"></i> 指尖血糖记录
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="sticky-header">
+                            <tr>
+                                <th class="d-none d-sm-table-cell">时间</th>
+                                <th class="d-sm-none">时间/血糖</th>
+                                <th class="d-none d-sm-table-cell">血糖值 (mmol/L)</th>
+                                <th class="d-none d-md-table-cell">血糖值 (mg/dL)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="meter-table-body">
+                            <tr>
+                                <td colspan="3" class="loading">
+                                    <i class="fas fa-spinner fa-spin"></i> 加载中...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- AI分析模态框 -->
@@ -430,6 +494,28 @@
                 console.error('加载治疗数据失败:', error);
                 showNotification('加载治疗数据失败', 'danger');
             });
+
+        // 加载运动数据
+        fetch(`/api/activity-data${urlParams}`)
+            .then(response => response.json())
+            .then(data => {
+                updateActivityTable(data);
+            })
+            .catch(error => {
+                console.error('加载运动数据失败:', error);
+                showNotification('加载运动数据失败', 'danger');
+            });
+
+        // 加载指尖血糖数据
+        fetch(`/api/meter-data${urlParams}`)
+            .then(response => response.json())
+            .then(data => {
+                updateMeterTable(data);
+            })
+            .catch(error => {
+                console.error('加载指尖血糖数据失败:', error);
+                showNotification('加载指尖血糖数据失败', 'danger');
+            });
     }
     
     // 更新血糖表格
@@ -541,6 +627,92 @@
                     <td class="d-sm-none">${mobileContent}</td>
                     <td class="d-none d-sm-table-cell">${nutritionDisplay}</td>
                     <td class="d-none d-md-table-cell">${typeDisplay}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // 更新运动表格
+    function updateActivityTable(data) {
+        const tbody = document.getElementById('activity-table-body');
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(item => {
+            // 构建时长显示
+            const durationDisplay = item.duration > 0 ? `${item.duration}分钟` : '-';
+            
+            // 构建类型/备注显示
+            const typeAndNotes = [];
+            if (item.event_type) {
+                typeAndNotes.push(item.event_type);
+            }
+            if (item.notes) {
+                typeAndNotes.push(item.notes);
+            }
+            const typeDisplay = typeAndNotes.length > 0 ? typeAndNotes.join(' - ') : '-';
+
+            // 移动端合并显示
+            const mobileContent = `
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="fw-bold">${item.time.split(' ')[1]}</div>
+                        <small class="text-muted">${item.time.split(' ')[0]}</small>
+                    </div>
+                    <div class="text-end">
+                        <div class="mb-1">${item.event_type || '运动'}</div>
+                        <small class="text-muted">${durationDisplay} ${typeDisplay !== '-' ? typeDisplay : ''}</small>
+                    </div>
+                </div>
+            `;
+
+            return `
+                <tr>
+                    <td class="d-none d-sm-table-cell">${item.time}</td>
+                    <td class="d-sm-none">${mobileContent}</td>
+                    <td class="d-none d-sm-table-cell">${item.event_type || '运动'}</td>
+                    <td class="d-none d-md-table-cell">${durationDisplay} ${typeDisplay !== '-' ? `<br><small class="text-muted">${typeDisplay}</small>` : ''}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // 更新指尖血糖表格
+    function updateMeterTable(data) {
+        const tbody = document.getElementById('meter-table-body');
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(item => {
+            // 获取血糖值颜色
+            const glucoseColor = getGlucoseColor(item.value_mmol);
+
+            // 移动端合并显示
+            const mobileContent = `
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-bold">${item.time.split(' ')[1]}</div>
+                        <small class="text-muted">${item.time.split(' ')[0]}</small>
+                    </div>
+                    <div class="text-end">
+                        <div class="fw-bold ${glucoseColor}">${formatGlucoseValue(item.value_mmol)} mmol/L</div>
+                        <small class="text-muted">${item.value_mgdl} mg/dL</small>
+                    </div>
+                </div>
+            `;
+
+            return `
+                <tr>
+                    <td class="d-none d-sm-table-cell">${item.time}</td>
+                    <td class="d-sm-none">${mobileContent}</td>
+                    <td class="d-none d-sm-table-cell ${glucoseColor}">${formatGlucoseValue(item.value_mmol)}</td>
+                    <td class="d-none d-md-table-cell">${item.value_mgdl}</td>
                 </tr>
             `;
         }).join('');

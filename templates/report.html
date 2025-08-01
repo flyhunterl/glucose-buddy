@@ -94,6 +94,30 @@
                                 <small class="text-muted">空腹平均血糖 (mmol/L)</small>
                             </div>
                         </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-info">{{ summary.get('meter_avg', '--') if summary else '--' }}</h4>
+                                <small class="text-muted">指尖血糖平均 (mmol/L)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-secondary">{{ summary.get('meter_count', '0') if summary else '0' }}</h4>
+                                <small class="text-muted">指尖血糖记录数</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-warning">{{ summary.get('total_activity_duration', '0') if summary else '0' }}</h4>
+                                <small class="text-muted">总运动时长 (分钟)</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="text-center">
+                                <h4 class="text-success">{{ summary.get('activity_count', '0') if summary else '0' }}</h4>
+                                <small class="text-muted">运动记录数</small>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -141,6 +165,100 @@
                                 <tr>
                                     <td colspan="8" class="text-center text-muted py-4">
                                         <i class="fas fa-info-circle"></i> 暂无数据
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 运动记录表格 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-running"></i> 运动记录
+                    </h6>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>日期</th>
+                                    <th>时间</th>
+                                    <th>运动类型</th>
+                                    <th>时长 (分钟)</th>
+                                    <th>备注</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for day in daily_data %}
+                                    {% for activity in day.get('activities', []) %}
+                                    <tr>
+                                        <td>{{ day.get('date', '--') }}</td>
+                                        <td>{{ activity.get('time', '--').split(' ')[1] if activity.get('time') else '--' }}</td>
+                                        <td>{{ activity.get('event_type', '--') or '运动' }}</td>
+                                        <td>{{ activity.get('duration', '0') or '0' }}</td>
+                                        <td>{{ activity.get('notes', '--') or '--' }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                {% endfor %}
+                                {% if not daily_data or daily_data|length == 0 or not daily_data|selectattr('activities', 'defined')|list %}
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-4">
+                                        <i class="fas fa-info-circle"></i> 暂无运动记录
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 指尖血糖记录表格 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-tint"></i> 指尖血糖记录
+                    </h6>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>日期</th>
+                                    <th>时间</th>
+                                    <th>血糖值 (mmol/L)</th>
+                                    <th>血糖值 (mg/dL)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for day in daily_data %}
+                                    {% for meter in day.get('meter_readings', []) %}
+                                    <tr>
+                                        <td>{{ day.get('date', '--') }}</td>
+                                        <td>{{ meter.get('time', '--').split(' ')[1] if meter.get('time') else '--' }}</td>
+                                        <td class="{{ get_glucose_color_class(meter.get('value')) }}">{{ meter.get('value', '--') or '--' }}</td>
+                                        <td>{{ (meter.get('value', 0) * 18) | round(0) if meter.get('value') else '--' }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                {% endfor %}
+                                {% if not daily_data or daily_data|length == 0 or not daily_data|selectattr('meter_readings', 'defined')|list %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">
+                                        <i class="fas fa-info-circle"></i> 暂无指尖血糖记录
                                     </td>
                                 </tr>
                                 {% endif %}
