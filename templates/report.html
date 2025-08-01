@@ -30,6 +30,39 @@
                             <p><strong>生成时间：</strong> <span id="report-generation-time">{{ generation_time }}</span></p>
                         </div>
                     </div>
+                    <!-- 自定义时间范围选择器 -->
+                    <div class="row mt-3">
+                        <div class="col-md-12">
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <label class="form-label mb-0 me-2">快速选择：</label>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(1)">今日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(3)">3日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(7)">7日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(15)">15日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(30)">30日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(60)">60日</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="loadReportWithDays(90)">90日</button>
+                                <button class="btn btn-outline-info btn-sm" onclick="toggleCustomDate()">自定义</button>
+                            </div>
+                            <div class="collapse mt-2" id="customDateRange">
+                                <div class="card card-body">
+                                    <div class="row align-items-end">
+                                        <div class="col-md-3">
+                                            <label for="customStartDate" class="form-label">开始日期</label>
+                                            <input type="date" id="customStartDate" class="form-control form-control-sm">
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="customEndDate" class="form-label">结束日期</label>
+                                            <input type="date" id="customEndDate" class="form-control form-control-sm">
+                                        </div>
+                                        <div class="col-md-2">
+                                            <button class="btn btn-primary btn-sm w-100" onclick="loadReportWithCustomDate()">生成报告</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -355,6 +388,63 @@ document.addEventListener('DOMContentLoaded', function() {
         second: '2-digit'
     });
     document.getElementById('report-generation-time').textContent = formattedTime;
+
+    // 设置自定义日期选择器的默认值
+    const urlParams = new URLSearchParams(window.location.search);
+    const startDate = urlParams.get('start_date');
+    const endDate = urlParams.get('end_date');
+    
+    if (startDate && endDate) {
+        document.getElementById('customStartDate').value = startDate;
+        document.getElementById('customEndDate').value = endDate;
+    } else {
+        // 默认显示最近7天
+        const today = new Date();
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(today.getDate() - 6);
+        
+        document.getElementById('customStartDate').value = sevenDaysAgo.toISOString().split('T')[0];
+        document.getElementById('customEndDate').value = today.toISOString().split('T')[0];
+    }
 });
+
+// 切换自定义日期选择器
+function toggleCustomDate() {
+    const collapse = new bootstrap.Collapse(document.getElementById('customDateRange'), {
+        toggle: true
+    });
+}
+
+// 使用天数加载报告
+function loadReportWithDays(days) {
+    const today = new Date();
+    const startDate = new Date();
+    startDate.setDate(today.getDate() - (days - 1));
+    
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const endDateStr = today.toISOString().split('T')[0];
+    
+    const url = `/report?start_date=${startDateStr}&end_date=${endDateStr}`;
+    window.location.href = url;
+}
+
+// 使用自定义日期加载报告
+function loadReportWithCustomDate() {
+    const startDate = document.getElementById('customStartDate').value;
+    const endDate = document.getElementById('customEndDate').value;
+    
+    if (!startDate || !endDate) {
+        alert('请选择开始和结束日期');
+        return;
+    }
+    
+    if (new Date(startDate) > new Date(endDate)) {
+        alert('开始日期不能晚于结束日期');
+        return;
+    }
+    
+    const url = `/report?start_date=${startDate}&end_date=${endDate}`;
+    window.location.href = url;
+}
 </script>
 {% endblock %}

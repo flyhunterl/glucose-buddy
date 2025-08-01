@@ -168,7 +168,7 @@
         // 连接状态
         socket.on('connect', function() {
             console.log('已连接到服务器');
-            showNotification('已连接到服务器', 'success');
+            // 连接成功时不显示通知，只在控制台记录
         });
 
         socket.on('disconnect', function() {
@@ -228,7 +228,8 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    showNotification(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`, 'success');
+                    // 同步成功时不显示通知，只在控制台记录
+                    console.log(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`);
                     // 刷新页面数据
                     if (typeof loadData === 'function') {
                         loadData();

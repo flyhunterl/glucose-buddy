@@ -2149,6 +2149,26 @@ def report_page():
             end_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d')
         
+        # 验证日期格式
+        try:
+            datetime.strptime(start_date, '%Y-%m-%d')
+            datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            # 如果日期格式无效，使用默认7天
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d')
+        
+        # 限制最大日期范围为365天，防止性能问题
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        date_diff = (end_dt - start_dt).days
+        
+        if date_diff > 365:
+            start_date = (end_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+        elif date_diff < 0:
+            # 如果开始日期晚于结束日期，交换它们
+            start_date, end_date = end_date, start_date
+        
         # 生成报表数据
         report_data = monitor.generate_report_data(start_date, end_date)
         

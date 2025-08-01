@@ -377,9 +377,7 @@
 
     // 同步数据并加载（页面加载时使用）
     function syncDataAndLoad() {
-        showNotification('正在同步最新数据...', 'info');
-
-        // 使用与手动同步相同的逻辑，但不依赖按钮元素
+        // 静默同步，不显示成功提示
         fetch('/api/sync', {
             method: 'POST',
             headers: {
@@ -390,7 +388,8 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showNotification(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`, 'success');
+                // 只在控制台记录成功信息，不显示通知
+                console.log(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`);
                 // 同步成功后加载数据
                 loadData(7);
             } else {
@@ -957,7 +956,8 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showNotification(data.message, 'success');
+                // 连接成功时不显示通知，只在控制台记录
+                console.log('Nightscout连接测试成功');
             } else {
                 showNotification(data.message, 'danger');
             }
