@@ -37,9 +37,6 @@
                             <button class="btn btn-warning btn-sm" onclick="openAIConsult()">
                                 <i class="fas fa-comments"></i> <span class="d-none d-sm-inline">AI咨询</span>
                             </button>
-                            <button class="btn btn-info btn-sm" onclick="testConnection()">
-                                <i class="fas fa-link"></i> <span class="d-none d-sm-inline">测试连接</span>
-                            </button>
                             <button class="btn btn-info btn-sm" onclick="openMessageInbox()">
                                 <i class="fas fa-envelope"></i> <span class="d-none d-sm-inline">消息记录</span>
                             </button>
@@ -946,33 +943,6 @@
         }
     }
     
-    // 测试连接
-    function testConnection() {
-        const btn = event.target;
-        const originalText = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中...';
-        btn.disabled = true;
-        
-        fetch('/api/test-connection', {
-            method: 'POST'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                // 连接成功时不显示通知，只在控制台记录
-                console.log('Nightscout连接测试成功');
-            } else {
-                showNotification(data.message, 'danger');
-            }
-        })
-        .catch(error => {
-            showNotification('测试失败: ' + error.message, 'danger');
-        })
-        .finally(() => {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-        });
-    }
 
     // 打开AI咨询模态框
     function openAIConsult() {
