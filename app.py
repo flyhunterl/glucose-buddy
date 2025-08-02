@@ -189,6 +189,19 @@ class NightscoutWebMonitor:
                 )
             """)
             
+            # 创建消息表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    is_read BOOLEAN DEFAULT 0,
+                    is_favorite BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             conn.commit()
             conn.close()
             logger.info("数据库初始化完成")
@@ -391,6 +404,9 @@ class NightscoutWebMonitor:
 
         if glucose_data:
             analysis = await self.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1)
+            
+            # 保存分析结果到消息表
+            self.save_message("analysis", "血糖分析报告", analysis)
             
             # 发送Web推送通知
             if self.config["notification"]["enable_web_push"]:
@@ -768,6 +784,137 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"从数据库获取指尖血糖数据失败: {e}")
             return []
+
+    def save_message(self, message_type: str, title: str, content: str) -> bool:
+        """保存消息到数据库"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO messages (type, title, content)
+                VALUES (?, ?, ?)
+            """, (message_type, title, content))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"保存消息失败: {e}")
+            return False
+    
+    def get_messages(self, message_type: Optional[str] = None, limit: int = 50) -> List[Dict]:
+        """从数据库获取消息"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+            
+            if message_type:
+                cursor.execute("""
+                    SELECT id, type, title, content, is_read, is_favorite, created_at
+                    FROM messages
+                    WHERE type = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (message_type, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, type, title, content, is_read, is_favorite, created_at
+                    FROM messages
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (limit,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            messages = []
+            for row in rows:
+                messages.append({
+                    'id': row[0],
+                    'type': row[1],
+                    'title': row[2],
+                    'content': row[3],
+                    'is_read': bool(row[4]),
+                    'is_favorite': bool(row[5]),
+                    'created_at': row[6]
+                })
+            
+            return messages
+        except Exception as e:
+            logger.error(f"获取消息失败: {e}")
+            return []
+    
+    def update_message_status(self, message_id: int, is_read: Optional[bool] = None, is_favorite: Optional[bool] = None) -> bool:
+        """更新消息状态"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+            
+            if is_read is not None and is_favorite is not None:
+                cursor.execute("""
+                    UPDATE messages
+                    SET is_read = ?, is_favorite = ?
+                    WHERE id = ?
+                """, (is_read, is_favorite, message_id))
+            elif is_read is not None:
+                cursor.execute("""
+                    UPDATE messages
+                    SET is_read = ?
+                    WHERE id = ?
+                """, (is_read, message_id))
+            elif is_favorite is not None:
+                cursor.execute("""
+                    UPDATE messages
+                    SET is_favorite = ?
+                    WHERE id = ?
+                """, (is_favorite, message_id))
+            else:
+                return False
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"更新消息状态失败: {e}")
+            return False
+    
+    def delete_message(self, message_id: int) -> bool:
+        """删除消息"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                DELETE FROM messages
+                WHERE id = ?
+            """, (message_id,))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"删除消息失败: {e}")
+            return False
+    
+    def get_unread_message_count(self) -> int:
+        """获取未读消息数量"""
+        try:
+            conn = sqlite3.connect("nightscout_data.db")
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM messages
+                WHERE is_read = 0
+            """)
+            
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+        except Exception as e:
+            logger.error(f"获取未读消息数量失败: {e}")
+            return 0
 
     async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
         """获取AI分析结果"""
@@ -1903,6 +2050,11 @@ def index():
     """主页 - 显示血糖数据表格"""
     return render_template('index.html')
 
+@app.route('/messages')
+def messages_page():
+    """消息收件箱页面"""
+    return render_template('messages.html', unread_count=monitor.get_unread_message_count())
+
 @app.route('/config')
 def config_page():
     """配置页面"""
@@ -2090,12 +2242,16 @@ def api_analysis():
     try:
         try:
             analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
+            # 保存分析结果到消息表
+            monitor.save_message("analysis", "血糖分析报告", analysis)
             return jsonify({'analysis': analysis})
         except RuntimeError as e:
             # 处理在非主线程中运行asyncio.run可能出现的问题
             if "cannot run loop while another loop is running" in str(e):
                 loop = asyncio.get_event_loop()
                 analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
+                # 保存分析结果到消息表
+                monitor.save_message("analysis", "血糖分析报告", analysis)
                 return jsonify({'analysis': analysis})
             else:
                 raise e
@@ -2120,12 +2276,16 @@ def api_ai_consult():
 
     try:
         response = asyncio.run(monitor.get_ai_consultation(question, include_data, days))
+        # 保存咨询结果到消息表
+        monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
         return jsonify({'response': response})
     except RuntimeError as e:
         # 处理在非主线程中运行asyncio.run可能出现的问题
         if "cannot run loop while another loop is running" in str(e):
             loop = asyncio.get_event_loop()
             response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
+            # 保存咨询结果到消息表
+            monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
             return jsonify({'response': response})
         else:
             raise e
@@ -2352,6 +2512,62 @@ def api_report_data():
         logger.error(f"获取报表数据失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/messages', methods=['GET'])
+def api_get_messages():
+    """获取消息列表API"""
+    try:
+        message_type = request.args.get('type')
+        limit = request.args.get('limit', 50, type=int)
+        
+        messages = monitor.get_messages(message_type, limit)
+        return jsonify({'messages': messages})
+    except Exception as e:
+        logger.error(f"获取消息列表失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/messages/<int:message_id>', methods=['PUT'])
+def api_update_message(message_id):
+    """更新消息状态API"""
+    try:
+        data = request.get_json()
+        is_read = data.get('is_read') if 'is_read' in data else None
+        is_favorite = data.get('is_favorite') if 'is_favorite' in data else None
+        
+        if is_read is None and is_favorite is None:
+            return jsonify({'error': '缺少更新参数'}), 400
+        
+        success = monitor.update_message_status(message_id, is_read, is_favorite)
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新消息状态失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/messages/<int:message_id>', methods=['DELETE'])
+def api_delete_message(message_id):
+    """删除消息API"""
+    try:
+        success = monitor.delete_message(message_id)
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除消息失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/messages/unread-count', methods=['GET'])
+def api_unread_count():
+    """获取未读消息数量API"""
+    try:
+        count = monitor.get_unread_message_count()
+        return jsonify({'unread_count': count})
+    except Exception as e:
+        logger.error(f"获取未读消息数量失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """登录页面"""
@@ -2405,6 +2621,7 @@ def handle_subscribe_notifications(data):
     except Exception as e:
         logger.error(f"订阅通知失败: {e}")
         emit('subscription_confirmed', {'status': 'error', 'message': str(e)})
+
 
 if __name__ == '__main__':
     # 配置日志

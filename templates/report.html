@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}血糖详细报告 - Nightscout 血糖监控{% endblock %}
+{% block title %}血糖记录表 - Nightscout 血糖监控{% endblock %}
 
 {% block content %}
 <div class="container-fluid">
@@ -100,7 +100,7 @@
                         <div class="col-md-3 col-sm-6 mb-3">
                             <div class="text-center">
                                 <h4 class="text-info">{{ summary.get('hba1c', '--') if summary else '--' }}</h4>
-                                <small class="text-muted">糖化血红蛋白 (%)</small>
+                                <small class="text-muted">估算糖化血红蛋白 (%)</small>
                             </div>
                         </div>
                         <div class="col-md-3 col-sm-6 mb-3">

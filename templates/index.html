@@ -40,8 +40,8 @@
                             <button class="btn btn-info btn-sm" onclick="testConnection()">
                                 <i class="fas fa-link"></i> <span class="d-none d-sm-inline">测试连接</span>
                             </button>
-                            <button class="btn btn-secondary btn-sm" onclick="syncDataAndLoad()">
-                                <i class="fas fa-sync"></i> <span class="d-none d-sm-inline">同步</span>
+                            <button class="btn btn-info btn-sm" onclick="openMessageInbox()">
+                                <i class="fas fa-envelope"></i> <span class="d-none d-sm-inline">消息记录</span>
                             </button>
                         </div>
                     </div>
@@ -373,6 +373,9 @@
 
         // 先同步数据，然后加载显示
         syncDataAndLoad();
+        
+        // 更新未读消息数量
+        updateUnreadCountIndicator();
     });
 
     // 同步数据并加载（页面加载时使用）
@@ -1091,6 +1094,37 @@
         
         // 在新窗口打开报表页面
         window.open(reportUrl, '_blank');
+    }
+    
+    // 打开消息收件箱
+    function openMessageInbox() {
+        window.open('/messages', '_blank');
+    }
+    
+    // 更新未读消息数量指示器
+    function updateUnreadCountIndicator() {
+        fetch('/api/messages/unread-count')
+            .then(response => response.json())
+            .then(data => {
+                const messageBtn = document.querySelector('button[onclick="openMessageInbox()"]');
+                if (messageBtn && data.unread_count > 0) {
+                    // 移除可能已存在的红点
+                    const existingBadge = messageBtn.querySelector('.unread-badge');
+                    if (existingBadge) {
+                        existingBadge.remove();
+                    }
+                    
+                    // 添加新的红点
+                    const badge = document.createElement('span');
+                    badge.className = 'position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger unread-badge';
+                    badge.textContent = data.unread_count > 99 ? '99+' : data.unread_count;
+                    messageBtn.appendChild(badge);
+                    messageBtn.classList.add('position-relative');
+                }
+            })
+            .catch(error => {
+                console.error('获取未读消息数量失败:', error);
+            });
     }
 </script>
 {% endblock %}

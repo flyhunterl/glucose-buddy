@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}消息收件箱 - Nightscout 血糖监控{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-envelope"></i> 消息收件箱
+                    {% if unread_count > 0 %}
+                    <span class="badge bg-danger ms-2">{{ unread_count }}</span>
+                    {% endif %}
+                </h5>
+                <div class="btn-group">
+                    <button class="btn btn-outline-primary btn-sm active" onclick="filterMessages('all')">
+                        全部
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('analysis')">
+                        AI分析
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('consultation')">
+                        AI咨询
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="messages-container">
+                    <div class="text-center">
+                        <i class="fas fa-spinner fa-spin"></i> 加载中...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 消息详情模态框 -->
+<div class="modal fade" id="messageModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="messageModalTitle">消息详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="messageModalContent">
+                    <!-- 消息内容 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" onclick="copyMessageContent()">
+                    <i class="fas fa-copy"></i> 复制内容
+                </button>
+                <button type="button" class="btn btn-warning" id="favoriteBtn" onclick="toggleFavorite()">
+                    <i class="fas fa-star"></i> 收藏
+                </button>
+                <button type="button" class="btn btn-danger" onclick="deleteMessage()">
+                    <i class="fas fa-trash"></i> 删除
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let currentMessages = [];
+    let currentFilter = 'all';
+    let currentMessageId = null;
+
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        loadMessages();
+        updateUnreadCount();
+    });
+
+    // 加载消息列表
+    function loadMessages() {
+        const url = currentFilter === 'all' 
+            ? '/api/messages' 
+            : `/api/messages?type=${currentFilter}`;
+        
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.messages) {
+                    currentMessages = data.messages;
+                    renderMessages(data.messages);
+                } else {
+                    document.getElementById('messages-container').innerHTML = `
+                        <div class="text-center text-muted">
+                            <i class="fas fa-inbox"></i> 暂无消息
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error('加载消息失败:', error);
+                document.getElementById('messages-container').innerHTML = `
+                    <div class="alert alert-danger">
+                        加载消息失败: ${error.message}
+                    </div>
+                `;
+            });
+    }
+
+    // 渲染消息列表
+    function renderMessages(messages) {
+        const container = document.getElementById('messages-container');
+        
+        if (messages.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted">
+                    <i class="fas fa-inbox"></i> 暂无消息
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = messages.map(message => {
+            const typeIcon = message.type === 'analysis' ? 'fa-brain' : 'fa-comments';
+            const typeText = message.type === 'analysis' ? 'AI分析' : 'AI咨询';
+            const unreadClass = message.is_read ? '' : 'unread-message';
+            const favoriteIcon = message.is_favorite ? 'fas' : 'far';
+            
+            return `
+                <div class="card mb-3 message-card ${unreadClass}" data-id="${message.id}">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <div class="d-flex align-items-center mb-2">
+                                    <i class="fas ${typeIcon} me-2 text-primary"></i>
+                                    <h6 class="card-title mb-0">${message.title}</h6>
+                                    <span class="badge bg-secondary ms-2">${typeText}</span>
+                                    ${!message.is_read ? '<span class="badge bg-danger ms-1">未读</span>' : ''}
+                                </div>
+                                <p class="card-text text-muted">${message.content.substring(0, 100)}${message.content.length > 100 ? '...' : ''}</p>
+                                <small class="text-muted">${formatDateTime(message.created_at)}</small>
+                            </div>
+                            <div class="ms-3">
+                                <button class="btn btn-outline-warning btn-sm me-1" onclick="toggleFavoriteQuick(${message.id})" title="收藏">
+                                    <i class="${favoriteIcon} fa-star"></i>
+                                </button>
+                                <button class="btn btn-primary btn-sm" onclick="viewMessage(${message.id})" title="查看详情">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // 查看消息详情
+    function viewMessage(messageId) {
+        const message = currentMessages.find(m => m.id === messageId);
+        if (!message) return;
+
+        currentMessageId = messageId;
+        
+        // 标记为已读
+        if (!message.is_read) {
+            updateMessageStatus(messageId, { is_read: true });
+            message.is_read = true;
+            renderMessages(currentMessages);
+            updateUnreadCount();
+        }
+
+        // 显示模态框
+        document.getElementById('messageModalTitle').textContent = message.title;
+        document.getElementById('messageModalContent').innerHTML = `
+            <div class="message-content">
+                ${message.content.replace(/\n/g, '<br>')}
+            </div>
+            <hr>
+            <small class="text-muted">
+                类型: ${message.type === 'analysis' ? 'AI分析' : 'AI咨询'} | 
+                创建时间: ${formatDateTime(message.created_at)}
+            </small>
+        `;
+
+        // 更新收藏按钮状态
+        const favoriteBtn = document.getElementById('favoriteBtn');
+        if (message.is_favorite) {
+            favoriteBtn.innerHTML = '<i class="fas fa-star"></i> 取消收藏';
+            favoriteBtn.classList.remove('btn-warning');
+            favoriteBtn.classList.add('btn-outline-warning');
+        } else {
+            favoriteBtn.innerHTML = '<i class="fas fa-star"></i> 收藏';
+            favoriteBtn.classList.remove('btn-outline-warning');
+            favoriteBtn.classList.add('btn-warning');
+        }
+
+        const modal = new bootstrap.Modal(document.getElementById('messageModal'));
+        modal.show();
+    }
+
+    // 切换收藏状态
+    function toggleFavorite() {
+        if (!currentMessageId) return;
+        
+        const message = currentMessages.find(m => m.id === currentMessageId);
+        if (!message) return;
+
+        const newFavoriteStatus = !message.is_favorite;
+        updateMessageStatus(currentMessageId, { is_favorite: newFavoriteStatus });
+        
+        message.is_favorite = newFavoriteStatus;
+        renderMessages(currentMessages);
+        
+        // 更新按钮状态
+        const favoriteBtn = document.getElementById('favoriteBtn');
+        if (newFavoriteStatus) {
+            favoriteBtn.innerHTML = '<i class="fas fa-star"></i> 取消收藏';
+            favoriteBtn.classList.remove('btn-warning');
+            favoriteBtn.classList.add('btn-outline-warning');
+        } else {
+            favoriteBtn.innerHTML = '<i class="fas fa-star"></i> 收藏';
+            favoriteBtn.classList.remove('btn-outline-warning');
+            favoriteBtn.classList.add('btn-warning');
+        }
+    }
+
+    // 快速切换收藏状态
+    function toggleFavoriteQuick(messageId) {
+        const message = currentMessages.find(m => m.id === messageId);
+        if (!message) return;
+
+        const newFavoriteStatus = !message.is_favorite;
+        updateMessageStatus(messageId, { is_favorite: newFavoriteStatus });
+        
+        message.is_favorite = newFavoriteStatus;
+        renderMessages(currentMessages);
+    }
+
+    // 复制消息内容
+    function copyMessageContent() {
+        const content = document.getElementById('messageModalContent').innerText;
+        navigator.clipboard.writeText(content).then(() => {
+            showNotification('内容已复制到剪贴板', 'success');
+        }).catch(() => {
+            showNotification('复制失败，请手动选择复制', 'warning');
+        });
+    }
+
+    // 删除消息
+    function deleteMessage() {
+        if (!currentMessageId) return;
+        
+        if (confirm('确定要删除这条消息吗？')) {
+            fetch(`/api/messages/${currentMessageId}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 从列表中移除消息
+                    currentMessages = currentMessages.filter(m => m.id !== currentMessageId);
+                    renderMessages(currentMessages);
+                    updateUnreadCount();
+                    
+                    // 关闭模态框
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('messageModal'));
+                    modal.hide();
+                    
+                    showNotification('消息已删除', 'success');
+                } else {
+                    showNotification('删除失败: ' + (data.error || '未知错误'), 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('删除消息失败:', error);
+                showNotification('删除失败: ' + error.message, 'danger');
+            });
+        }
+    }
+
+    // 更新消息状态
+    function updateMessageStatus(messageId, updates) {
+        fetch(`/api/messages/${messageId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(updates)
+        })
+        .catch(error => {
+            console.error('更新消息状态失败:', error);
+        });
+    }
+
+    // 筛选消息
+    function filterMessages(type) {
+        currentFilter = type;
+        
+        // 更新按钮状态
+        document.querySelectorAll('.btn-group .btn').forEach(btn => {
+            btn.classList.remove('active', 'btn-primary');
+            btn.classList.add('btn-outline-primary');
+        });
+        event.target.classList.remove('btn-outline-primary');
+        event.target.classList.add('btn-primary', 'active');
+        
+        // 重新加载消息
+        loadMessages();
+    }
+
+    // 更新未读消息数量
+    function updateUnreadCount() {
+        fetch('/api/messages/unread-count')
+            .then(response => response.json())
+            .then(data => {
+                const badge = document.querySelector('.badge.bg-danger');
+                if (data.unread_count > 0) {
+                    if (badge) {
+                        badge.textContent = data.unread_count;
+                    } else {
+                        const title = document.querySelector('.card-title');
+                        title.innerHTML += ` <span class="badge bg-danger ms-2">${data.unread_count}</span>`;
+                    }
+                } else if (badge) {
+                    badge.remove();
+                }
+            })
+            .catch(error => {
+                console.error('获取未读消息数量失败:', error);
+            });
+    }
+
+    // 格式化日期时间
+    function formatDateTime(dateTimeStr) {
+        const date = new Date(dateTimeStr);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    // 显示通知
+    function showNotification(message, type = 'info') {
+        // 创建通知元素
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        notification.style.top = '20px';
+        notification.style.right = '20px';
+        notification.style.zIndex = '9999';
+        notification.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // 3秒后自动关闭
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }
+</script>
+
+<style>
+    .unread-message {
+        border-left: 4px solid #dc3545;
+        background-color: #fff5f5;
+    }
+    
+    .message-content {
+        white-space: pre-wrap;
+        font-family: inherit;
+        line-height: 1.6;
+    }
+    
+    .message-card:hover {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        transition: box-shadow 0.3s ease;
+    }
+</style>
+{% endblock %}
