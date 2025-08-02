@@ -27,6 +27,11 @@
 - **个性化建议**：根据血糖模式提供饮食和生活建议
 - **多模型支持**：支持 OpenAI、Ollama 等 AI 服务
 
+### 📨 消息中心
+- **统一收件箱**：所有AI生成的分析报告和咨询建议都会自动存入消息中心，方便随时查阅。
+- **未读消息提醒**：主页按钮上会显示未读消息数量，确保您不会错过任何重要信息。
+- **消息管理**：支持将消息标记为已读、收藏或删除。
+
 ### 🔔 通知系统
 - **浏览器通知**：实时 Web Push 通知
 - **邮件通知**：定时发送血糖分析报告
@@ -43,6 +48,7 @@
 
 ###  更新计划
 - ✅ **增加AI咨询功能** - 已完成
+- ✅ **增加消息中心** - 已完成，用于统一管理AI生成的分析报告和咨询建议。
 - ✅ **增加自定义日期范围，增加60、90天周期** - 已完成
 - ✅ **增加包含餐前餐后血糖的详细报告表** - 已完成
 - ✅ **增加个人身高体重信息配置并计算BMI** - 已完成
@@ -59,8 +65,8 @@
 
 1. **克隆项目**
 ```bash
-git clone <repository-url>
-cd nightscout-web
+git clone https://github.com/flyhunterl/glucose-buddy.git
+cd glucose-buddy
 ```
 2. **配置config.toml**
 
@@ -183,6 +189,7 @@ nightscout-web/
 │   ├── base.html
 │   ├── index.html
 │   ├── config.html
+│   ├── messages.html    # 消息中心页面
 │   └── report.html       # 血糖报表模板
 ├── static/               # 静态文件
 │   ├── sw.js            # Service Worker
@@ -217,6 +224,10 @@ python app.py
 | `/api/test-email` | POST | 测试邮件 |
 | `/report` | GET | 血糖详细报表页面 |
 | `/api/report-data` | GET | 获取报表数据 |
+| `/messages` | GET | 消息中心页面 |
+| `/api/messages` | GET | 获取所有消息 |
+| `/api/messages/<id>` | PUT/DELETE | 更新或删除消息 |
+| `/api/messages/unread-count` | GET | 获取未读消息数 |
 
 ## 🔍 故障排除
 
@@ -299,6 +310,7 @@ A web-based Nightscout glucose monitoring application with data visualization, A
 - **📊 Real-time Monitoring**: Fetch glucose data from Nightscout API
 - **📈 Data Visualization**: Interactive charts and data tables
 - **🤖 AI Analysis**: Intelligent glucose pattern analysis with recommendations
+- **📨 Message Center**: Centralized inbox for all AI-generated analysis reports and consultation responses.
 - **🔔 Smart Notifications**: Browser push notifications and email alerts
 - **📱 Mobile-Friendly**: Responsive design with PWA support
 - **⚙️ Easy Configuration**: Web-based configuration interface
