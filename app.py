@@ -1692,7 +1692,76 @@ class NightscoutWebMonitor:
         
         return {"bmi": bmi, "status": status}
 
-    def generate_report_data(self, start_date: str, end_date: str) -> Dict:
+    def filter_data_by_exclude_times(self, data: List[Dict], exclude_times: List[Dict]) -> List[Dict]:
+        """根据排除时间段过滤数据"""
+        if not exclude_times or not data:
+            return data
+        
+        # 将排除时间段转换为datetime对象（上海时间）
+        exclude_ranges = []
+        for exclude_time in exclude_times:
+            try:
+                start_time = datetime.strptime(exclude_time['start'], '%Y-%m-%d %H:%M')
+                end_time = datetime.strptime(exclude_time['end'], '%Y-%m-%d %H:%M')
+                exclude_ranges.append((start_time, end_time))
+            except ValueError as e:
+                logger.warning(f"解析排除时间段失败: {exclude_time}, 错误: {e}")
+                continue
+        
+        if not exclude_ranges:
+            return data
+        
+        filtered_data = []
+        for item in data:
+            # 获取数据项的时间戳
+            item_time_str = None
+            if 'shanghai_time' in item and item['shanghai_time']:
+                item_time_str = item['shanghai_time']
+            elif 'dateString' in item and item['dateString']:
+                item_time_str = item['dateString']
+            elif 'created_at' in item and item['created_at']:
+                item_time_str = item['created_at']
+            
+            if not item_time_str:
+                # 如果没有时间信息，保留该数据项
+                filtered_data.append(item)
+                continue
+            
+            try:
+                # 解析时间戳为上海时间
+                if item_time_str.endswith('Z'):
+                    # UTC时间格式 - 转换为上海时间
+                    if '.' in item_time_str:
+                        utc_time = datetime.fromisoformat(item_time_str[:-1]).replace(tzinfo=timezone.utc)
+                    else:
+                        utc_time = datetime.fromisoformat(item_time_str[:-1]).replace(tzinfo=timezone.utc)
+                    # 转换为上海时间（UTC+8）
+                    shanghai_tz = timezone(timedelta(hours=8))
+                    item_time = utc_time.astimezone(shanghai_tz)
+                    # 移除时区信息以便比较
+                    item_time = item_time.replace(tzinfo=None)
+                else:
+                    # 上海时间格式
+                    item_time = datetime.strptime(item_time_str, '%Y-%m-%d %H:%M:%S')
+                
+                # 检查是否在任何排除时间段内
+                is_excluded = False
+                for exclude_start, exclude_end in exclude_ranges:
+                    if exclude_start <= item_time <= exclude_end:
+                        is_excluded = True
+                        break
+                
+                if not is_excluded:
+                    filtered_data.append(item)
+                    
+            except (ValueError, TypeError) as e:
+                logger.warning(f"解析数据时间失败: {item_time_str}, 错误: {e}")
+                # 如果时间解析失败，保留该数据项
+                filtered_data.append(item)
+        
+        return filtered_data
+
+    def generate_report_data(self, start_date: str, end_date: str, exclude_times: Optional[List[Dict]] = None) -> Dict:
         """生成血糖详细报告数据"""
         try:
             # 获取指定日期范围的数据
@@ -1700,6 +1769,13 @@ class NightscoutWebMonitor:
             treatment_data = self.get_treatment_data_from_db(start_date=start_date, end_date=end_date)
             activity_data = self.get_activity_data_from_db(start_date=start_date, end_date=end_date)
             meter_data = self.get_meter_data_from_db(start_date=start_date, end_date=end_date)
+            
+            # 应用排除时间段过滤
+            if exclude_times:
+                glucose_data = self.filter_data_by_exclude_times(glucose_data, exclude_times)
+                treatment_data = self.filter_data_by_exclude_times(treatment_data, exclude_times)
+                activity_data = self.filter_data_by_exclude_times(activity_data, exclude_times)
+                meter_data = self.filter_data_by_exclude_times(meter_data, exclude_times)
             
             if not glucose_data:
                 return {
@@ -2431,6 +2507,18 @@ def report_page():
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        exclude_times_param = request.args.get('exclude_times')
+        exclude_times = None
+        
+        # 解析排除时间段参数
+        if exclude_times_param:
+            try:
+                exclude_times = json.loads(exclude_times_param)
+                if not isinstance(exclude_times, list):
+                    exclude_times = None
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"解析排除时间段参数失败: {exclude_times_param}")
+                exclude_times = None
         
         if not start_date or not end_date:
             # 默认显示最近7天
@@ -2458,7 +2546,7 @@ def report_page():
             start_date, end_date = end_date, start_date
         
         # 生成报表数据
-        report_data = monitor.generate_report_data(start_date, end_date)
+        report_data = monitor.generate_report_data(start_date, end_date, exclude_times)
         
         # 准备模板上下文
         context = {
@@ -2489,6 +2577,18 @@ def api_report_data():
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        exclude_times_param = request.args.get('exclude_times')
+        exclude_times = None
+        
+        # 解析排除时间段参数
+        if exclude_times_param:
+            try:
+                exclude_times = json.loads(exclude_times_param)
+                if not isinstance(exclude_times, list):
+                    exclude_times = None
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"解析排除时间段参数失败: {exclude_times_param}")
+                exclude_times = None
         
         if not start_date or not end_date:
             return jsonify({'error': '缺少日期参数'}), 400
@@ -2501,7 +2601,7 @@ def api_report_data():
             return jsonify({'error': '日期格式错误，请使用YYYY-MM-DD格式'}), 400
             
         # 生成报表数据
-        report_data = monitor.generate_report_data(start_date, end_date)
+        report_data = monitor.generate_report_data(start_date, end_date, exclude_times)
         
         if 'error' in report_data and report_data['error']:
             return jsonify({'error': report_data['error']}), 404

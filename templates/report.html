@@ -30,6 +30,21 @@
                             <p><strong>生成时间：</strong> <span id="report-generation-time">{{ generation_time }}</span></p>
                         </div>
                     </div>
+                    <!-- 排除时间段显示 -->
+                    <div class="row mt-2" id="excludeTimeInfo" style="display: none;">
+                        <div class="col-12">
+                            <div class="alert alert-warning alert-dismissible fade show mb-0" role="alert">
+                                <div class="d-flex align-items-center">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>
+                                    <div>
+                                        <strong>已应用排除时间段：</strong>
+                                        <span id="excludeTimeDisplay"></span>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn-close" aria-label="Close" onclick="hideExcludeTimeInfo()"></button>
+                            </div>
+                        </div>
+                    </div>
                     <!-- 自定义时间范围选择器 -->
                     <div class="row mt-3">
                         <div class="col-md-12">
@@ -57,6 +72,62 @@
                                         </div>
                                         <div class="col-md-2">
                                             <button class="btn btn-primary btn-sm w-100" onclick="loadReportWithCustomDate()">生成报告</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 排除时间段设置器 -->
+                    <div class="row mt-3">
+                        <div class="col-md-12">
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <button class="btn btn-outline-warning btn-sm" onclick="toggleExcludeTime()">
+                                    <i class="fas fa-ban"></i> 排除时间段
+                                </button>
+                                <span class="text-muted small" id="excludeStatus">未设置排除时间段</span>
+                            </div>
+                            <div class="collapse mt-2" id="excludeTimeRange">
+                                <div class="card card-body">
+                                    <div class="row mb-3">
+                                        <div class="col-12">
+                                            <h6 class="card-title mb-3">设置排除时间段</h6>
+                                            <p class="text-muted small mb-3">添加需要排除的时间段，这些时间段内的数据将不会出现在报告中</p>
+                                            
+                                            <!-- 排除时间段列表 -->
+                                            <div id="excludeTimeList" class="mb-3">
+                                                <!-- 动态添加的排除时间段将显示在这里 -->
+                                            </div>
+                                            
+                                            <!-- 添加排除时间段表单 -->
+                                            <div class="row align-items-end">
+                                                <div class="col-md-3">
+                                                    <label for="excludeStartDate" class="form-label">排除开始日期</label>
+                                                    <input type="date" id="excludeStartDate" class="form-control form-control-sm">
+                                                </div>
+                                                <div class="col-md-2">
+                                                    <label for="excludeStartTime" class="form-label">排除开始时间</label>
+                                                    <input type="time" id="excludeStartTime" class="form-control form-control-sm">
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label for="excludeEndDate" class="form-label">排除结束日期</label>
+                                                    <input type="date" id="excludeEndDate" class="form-control form-control-sm">
+                                                </div>
+                                                <div class="col-md-2">
+                                                    <label for="excludeEndTime" class="form-label">排除结束时间</label>
+                                                    <input type="time" id="excludeEndTime" class="form-control form-control-sm">
+                                                </div>
+                                                <div class="col-md-2">
+                                                    <button class="btn btn-warning btn-sm w-100" onclick="addExcludeTime()">添加排除</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-12">
+                                            <button class="btn btn-success btn-sm me-2" onclick="applyExcludeTime()">应用排除设置</button>
+                                            <button class="btn btn-secondary btn-sm" onclick="clearExcludeTime()">清除所有排除</button>
                                         </div>
                                     </div>
                                 </div>
@@ -485,6 +556,19 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('customStartDate').value = sevenDaysAgo.toISOString().split('T')[0];
         document.getElementById('customEndDate').value = today.toISOString().split('T')[0];
     }
+    
+    // 加载排除时间段
+    const excludeTimesParam = urlParams.get('exclude_times');
+    if (excludeTimesParam) {
+        try {
+            excludeTimes = JSON.parse(decodeURIComponent(excludeTimesParam));
+            updateExcludeTimeList();
+            updateExcludeStatus();
+            showExcludeTimeInfo();
+        } catch (e) {
+            console.error('解析排除时间段参数失败:', e);
+        }
+    }
 });
 
 // 切换自定义日期选择器
@@ -503,7 +587,13 @@ function loadReportWithDays(days) {
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = today.toISOString().split('T')[0];
     
-    const url = `/report?start_date=${startDateStr}&end_date=${endDateStr}`;
+    let url = `/report?start_date=${startDateStr}&end_date=${endDateStr}`;
+    
+    // 添加排除时间段参数
+    if (excludeTimes.length > 0) {
+        url += `&exclude_times=${encodeURIComponent(JSON.stringify(excludeTimes))}`;
+    }
+    
     window.location.href = url;
 }
 
@@ -522,8 +612,173 @@ function loadReportWithCustomDate() {
         return;
     }
     
-    const url = `/report?start_date=${startDate}&end_date=${endDate}`;
+    let url = `/report?start_date=${startDate}&end_date=${endDate}`;
+    
+    // 添加排除时间段参数
+    if (excludeTimes.length > 0) {
+        url += `&exclude_times=${encodeURIComponent(JSON.stringify(excludeTimes))}`;
+    }
+    
     window.location.href = url;
+}
+
+// 全局变量存储排除时间段
+let excludeTimes = [];
+
+// 切换排除时间段面板
+function toggleExcludeTime() {
+    const collapse = new bootstrap.Collapse(document.getElementById('excludeTimeRange'), {
+        toggle: true
+    });
+}
+
+// 添加排除时间段
+function addExcludeTime() {
+    const startDate = document.getElementById('excludeStartDate').value;
+    const startTime = document.getElementById('excludeStartTime').value;
+    const endDate = document.getElementById('excludeEndDate').value;
+    const endTime = document.getElementById('excludeEndTime').value;
+    
+    if (!startDate || !startTime || !endDate || !endTime) {
+        alert('请填写完整的排除时间段信息');
+        return;
+    }
+    
+    const startDateTime = new Date(`${startDate} ${startTime}`);
+    const endDateTime = new Date(`${endDate} ${endTime}`);
+    
+    if (startDateTime >= endDateTime) {
+        alert('排除开始时间必须早于排除结束时间');
+        return;
+    }
+    
+    const excludeTime = {
+        start: `${startDate} ${startTime}`,
+        end: `${endDate} ${endTime}`
+    };
+    
+    excludeTimes.push(excludeTime);
+    updateExcludeTimeList();
+    updateExcludeStatus();
+    
+    // 清空表单
+    document.getElementById('excludeStartDate').value = '';
+    document.getElementById('excludeStartTime').value = '';
+    document.getElementById('excludeEndDate').value = '';
+    document.getElementById('excludeEndTime').value = '';
+}
+
+// 更新排除时间段列表显示
+function updateExcludeTimeList() {
+    const listContainer = document.getElementById('excludeTimeList');
+    
+    if (excludeTimes.length === 0) {
+        listContainer.innerHTML = '<p class="text-muted small">暂无排除时间段</p>';
+        return;
+    }
+    
+    let html = '<div class="list-group">';
+    excludeTimes.forEach((time, index) => {
+        html += `
+            <div class="list-group-item list-group-item-warning d-flex justify-content-between align-items-center">
+                <div>
+                    <small class="fw-bold">${time.start}</small>
+                    <span class="mx-2">至</span>
+                    <small class="fw-bold">${time.end}</small>
+                </div>
+                <button class="btn btn-outline-danger btn-sm" onclick="removeExcludeTime(${index})">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        `;
+    });
+    html += '</div>';
+    
+    listContainer.innerHTML = html;
+}
+
+// 更新排除状态显示
+function updateExcludeStatus() {
+    const statusElement = document.getElementById('excludeStatus');
+    if (excludeTimes.length === 0) {
+        statusElement.textContent = '未设置排除时间段';
+        statusElement.className = 'text-muted small';
+    } else {
+        statusElement.textContent = `已设置 ${excludeTimes.length} 个排除时间段`;
+        statusElement.className = 'text-warning small fw-bold';
+    }
+}
+
+// 移除排除时间段
+function removeExcludeTime(index) {
+    excludeTimes.splice(index, 1);
+    updateExcludeTimeList();
+    updateExcludeStatus();
+}
+
+// 应用排除设置并重新加载报告
+function applyExcludeTime() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const startDate = urlParams.get('start_date');
+    const endDate = urlParams.get('end_date');
+    
+    if (!startDate || !endDate) {
+        alert('请先选择报告的时间范围');
+        return;
+    }
+    
+    let url = `/report?start_date=${startDate}&end_date=${endDate}`;
+    
+    // 添加排除时间段参数
+    if (excludeTimes.length > 0) {
+        url += `&exclude_times=${encodeURIComponent(JSON.stringify(excludeTimes))}`;
+    }
+    
+    window.location.href = url;
+}
+
+// 清除所有排除时间段
+function clearExcludeTime() {
+    if (excludeTimes.length > 0 && !confirm('确定要清除所有排除时间段设置吗？')) {
+        return;
+    }
+    
+    excludeTimes = [];
+    updateExcludeTimeList();
+    updateExcludeStatus();
+    
+    // 重新加载报告（不带排除参数）
+    const urlParams = new URLSearchParams(window.location.search);
+    const startDate = urlParams.get('start_date');
+    const endDate = urlParams.get('end_date');
+    
+    if (startDate && endDate) {
+        window.location.href = `/report?start_date=${startDate}&end_date=${endDate}`;
+    }
+}
+
+// 获取当前排除时间段
+function getExcludeTimes() {
+    return excludeTimes;
+}
+
+// 显示排除时间段信息
+function showExcludeTimeInfo() {
+    if (excludeTimes.length > 0) {
+        const excludeTimeInfo = document.getElementById('excludeTimeInfo');
+        const excludeTimeDisplay = document.getElementById('excludeTimeDisplay');
+        
+        const timeStrings = excludeTimes.map(time => `${time.start} 至 ${time.end}`);
+        excludeTimeDisplay.textContent = timeStrings.join('；');
+        
+        excludeTimeInfo.style.display = 'block';
+    }
+}
+
+// 隐藏排除时间段信息
+function hideExcludeTimeInfo() {
+    const excludeTimeInfo = document.getElementById('excludeTimeInfo');
+    excludeTimeInfo.style.display = 'none';
 }
 </script>
 {% endblock %}
