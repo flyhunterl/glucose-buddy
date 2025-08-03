@@ -13,7 +13,7 @@
                         <img src="{{ url_for('static', filename='ico.png') }}" alt="Logo" style="height: 24px; margin-right: 5px;"> 血糖详细报告
                     </h5>
                     <div>
-                        <button class="btn btn-primary btn-sm" onclick="window.print()">
+                        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#printOptionsModal">
                             <i class="fas fa-print"></i> 打印报告
                         </button>
                         <button class="btn btn-secondary btn-sm ms-2" onclick="window.history.back()">
@@ -140,7 +140,7 @@
     </div>
 
     <!-- 统计概览 -->
-    <div class="row mb-4">
+    <div class="row mb-4 print-section print-summary">
         <div class="col-12">
             <div class="card">
                 <div class="card-header">
@@ -198,38 +198,14 @@
                                 <small class="text-muted">空腹平均血糖 (mmol/L)</small>
                             </div>
                         </div>
-                        <div class="col-md-3 col-sm-6 mb-3">
-                            <div class="text-center">
-                                <h4 class="text-info">{{ summary.get('meter_avg', '--') if summary else '--' }}</h4>
-                                <small class="text-muted">指尖血糖平均 (mmol/L)</small>
-                            </div>
-                        </div>
-                        <div class="col-md-3 col-sm-6 mb-3">
-                            <div class="text-center">
-                                <h4 class="text-secondary">{{ summary.get('meter_count', '0') if summary else '0' }}</h4>
-                                <small class="text-muted">指尖血糖记录数</small>
-                            </div>
-                        </div>
-                        <div class="col-md-3 col-sm-6 mb-3">
-                            <div class="text-center">
-                                <h4 class="text-warning">{{ summary.get('total_activity_duration', '0') if summary else '0' }}</h4>
-                                <small class="text-muted">总运动时长 (分钟)</small>
-                            </div>
-                        </div>
-                        <div class="col-md-3 col-sm-6 mb-3">
-                            <div class="text-center">
-                                <h4 class="text-success">{{ summary.get('activity_count', '0') if summary else '0' }}</h4>
-                                <small class="text-muted">运动记录数</small>
-                            </div>
-                        </div>
-                    </div>
+                                            </div>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- 每日血糖表格 -->
-    <div class="row">
+    <div class="row print-section print-daily">
         <div class="col-12">
             <div class="card">
                 <div class="card-header">
@@ -347,7 +323,7 @@
     </div>
 
     <!-- 运动记录表格 -->
-    <div class="row mt-4">
+    <div class="row mt-4 print-section print-activity">
         <div class="col-12">
             <div class="card">
                 <div class="card-header">
@@ -395,7 +371,7 @@
     </div>
 
     <!-- 指尖血糖记录表格 -->
-    <div class="row mt-4">
+    <div class="row mt-4 print-section print-meter">
         <div class="col-12">
             <div class="card">
                 <div class="card-header">
@@ -441,9 +417,67 @@
     </div>
 </div>
 
+<!-- 打印选项模态框 -->
+<div class="modal fade" id="printOptionsModal" tabindex="-1" aria-labelledby="printOptionsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="printOptionsModalLabel">
+                    <i class="fas fa-print"></i> 选择打印内容
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="checkbox" id="printAll" checked>
+                    <label class="form-check-label" for="printAll">
+                        <strong>全部内容</strong>
+                    </label>
+                </div>
+                <hr>
+                <div class="form-check mb-2">
+                    <input class="form-check-input print-section-checkbox" type="checkbox" id="printSummary" value="summary" checked>
+                    <label class="form-check-label" for="printSummary">
+                        <i class="fas fa-chart-bar"></i> 统计概览
+                    </label>
+                </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input print-section-checkbox" type="checkbox" id="printDaily" value="daily" checked>
+                    <label class="form-check-label" for="printDaily">
+                        <i class="fas fa-table"></i> 每日血糖记录
+                    </label>
+                </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input print-section-checkbox" type="checkbox" id="printActivity" value="activity" checked>
+                    <label class="form-check-label" for="printActivity">
+                        <i class="fas fa-running"></i> 运动记录
+                    </label>
+                </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input print-section-checkbox" type="checkbox" id="printMeter" value="meter" checked>
+                    <label class="form-check-label" for="printMeter">
+                        <i class="fas fa-tint"></i> 指尖血糖记录
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="printSelectedSections()">打印</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 打印样式 -->
 <style>
 @media print {
+    .print-section {
+        display: block !important;
+    }
+    
+    .print-hidden {
+        display: none !important;
+    }
     @page {
         margin: 1cm;
         size: A4;
@@ -779,6 +813,122 @@ function showExcludeTimeInfo() {
 function hideExcludeTimeInfo() {
     const excludeTimeInfo = document.getElementById('excludeTimeInfo');
     excludeTimeInfo.style.display = 'none';
+}
+
+// 打印指定范围的内容
+function printReport(section) {
+    // 先隐藏所有打印区域
+    const allSections = document.querySelectorAll('.print-section');
+    allSections.forEach(s => {
+        s.classList.add('print-hidden');
+    });
+    
+    // 根据选择显示对应的打印区域
+    if (section === 'all') {
+        allSections.forEach(s => {
+            s.classList.remove('print-hidden');
+        });
+    } else {
+        const targetSections = document.querySelectorAll(`.print-${section}`);
+        targetSections.forEach(s => {
+            s.classList.remove('print-hidden');
+        });
+    }
+    
+    // 执行打印
+    window.print();
+    
+    // 打印完成后恢复所有区域的显示
+    setTimeout(() => {
+        allSections.forEach(s => {
+            s.classList.remove('print-hidden');
+        });
+    }, 1000);
+}
+
+// 全选/取消全选功能
+document.addEventListener('DOMContentLoaded', function() {
+    const printAllCheckbox = document.getElementById('printAll');
+    const sectionCheckboxes = document.querySelectorAll('.print-section-checkbox');
+    
+    printAllCheckbox.addEventListener('change', function() {
+        const isChecked = this.checked;
+        sectionCheckboxes.forEach(checkbox => {
+            checkbox.checked = isChecked;
+            checkbox.disabled = isChecked;
+        });
+    });
+    
+    sectionCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            const checkedCount = document.querySelectorAll('.print-section-checkbox:checked').length;
+            const totalCount = sectionCheckboxes.length;
+            
+            if (checkedCount === totalCount) {
+                printAllCheckbox.checked = true;
+                sectionCheckboxes.forEach(cb => cb.disabled = true);
+            } else {
+                printAllCheckbox.checked = false;
+                sectionCheckboxes.forEach(cb => cb.disabled = false);
+            }
+        });
+    });
+    
+    // 初始化状态
+    printAllCheckbox.checked = true;
+    sectionCheckboxes.forEach(cb => cb.disabled = true);
+});
+
+// 打印选中的章节
+function printSelectedSections() {
+    const printAllCheckbox = document.getElementById('printAll');
+    const sectionCheckboxes = document.querySelectorAll('.print-section-checkbox');
+    
+    // 先隐藏所有打印区域
+    const allSections = document.querySelectorAll('.print-section');
+    allSections.forEach(s => {
+        s.classList.add('print-hidden');
+    });
+    
+    // 根据选择显示对应的打印区域
+    if (printAllCheckbox.checked) {
+        allSections.forEach(s => {
+            s.classList.remove('print-hidden');
+        });
+    } else {
+        sectionCheckboxes.forEach(checkbox => {
+            if (checkbox.checked) {
+                const targetSections = document.querySelectorAll(`.print-${checkbox.value}`);
+                targetSections.forEach(s => {
+                    s.classList.remove('print-hidden');
+                });
+            }
+        });
+        
+        // 检查是否至少选择了一个选项
+        const selectedCount = document.querySelectorAll('.print-section-checkbox:checked').length;
+        if (selectedCount === 0) {
+            alert('请至少选择一个打印内容');
+            allSections.forEach(s => {
+                s.classList.remove('print-hidden');
+            });
+            return;
+        }
+    }
+    
+    // 关闭模态框
+    const modal = bootstrap.Modal.getInstance(document.getElementById('printOptionsModal'));
+    modal.hide();
+    
+    // 执行打印
+    window.print();
+    
+    // 打印完成后恢复所有区域的显示
+    setTimeout(() => {
+        allSections.forEach(s => {
+            s.classList.remove('print-hidden');
+        });
+    }, 1000);
 }
 </script>
 {% endblock %}
