@@ -406,34 +406,37 @@
         });
     }
     
-    // 同步数据并加载今日数据（页面加载时使用）
+    // 同步所有数据并加载今日数据（页面加载时使用）
     function syncDataAndLoadToday() {
-        // 静默同步，不显示成功提示
+        // 静默同步所有数据（使用较大的天数确保同步所有数据）
         fetch('/api/sync', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({days: 1})
+            body: JSON.stringify({days: 90}) // 同步90天的数据，基本覆盖所有历史数据
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
                 // 只在控制台记录成功信息，不显示通知
                 console.log(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`);
-                // 同步成功后加载数据
-                loadData(1);
+                // 同步成功后加载今日数据
+                const url = `?days=1`;
+                fetchAndLoadData(url);
             } else {
                 showNotification('同步失败: ' + data.error, 'warning');
-                // 即使同步失败也尝试加载本地数据
-                loadData(1);
+                // 即使同步失败也尝试加载今日数据
+                const url = `?days=1`;
+                fetchAndLoadData(url);
             }
         })
         .catch(error => {
             console.error('同步失败:', error);
             showNotification('同步失败: ' + error.message, 'warning');
-            // 同步失败也加载本地数据
-            loadData(1);
+            // 同步失败也加载今日数据
+            const url = `?days=1`;
+            fetchAndLoadData(url);
         });
     }
     
@@ -458,11 +461,11 @@
         const url = `?days=${days}`;
         fetchAndLoadData(url);
         
-        // 更新按钮状态
-        const buttons = document.querySelectorAll('.btn-group .btn');
+        // 更新按钮状态 - 只选择带有onclick属性的按钮，排除"自定义"按钮
+        const buttons = document.querySelectorAll('.btn-group .btn[onclick]');
         const btnDays = [1, 3, 7, 15, 30, 60, 90];
         const buttonIndex = btnDays.indexOf(days);
-        if (buttonIndex !== -1) {
+        if (buttonIndex !== -1 && buttonIndex < buttons.length) {
             updateActiveButton(buttons[buttonIndex]);
         }
     }
@@ -950,13 +953,83 @@
             }
         });
         
+        // 处理餐后两小时血糖数据 - 基于餐食记录创建餐后血糖点
+        const postMealDataPoints = [];
+        console.log('开始处理餐后两小时血糖数据...');
+        mealDataPoints.forEach(mealPoint => {
+            const mealTime = new Date(mealPoint.x);
+            const postMealTime = new Date(mealTime.getTime() + 2 * 60 * 60 * 1000); // 餐后两小时
+            
+            // 格式化为与原始数据相同的格式，避免UTC转换问题
+            const year = postMealTime.getFullYear();
+            const month = String(postMealTime.getMonth() + 1).padStart(2, '0');
+            const day = String(postMealTime.getDate()).padStart(2, '0');
+            const hours = String(postMealTime.getHours()).padStart(2, '0');
+            const minutes = String(postMealTime.getMinutes()).padStart(2, '0');
+            const seconds = String(postMealTime.getSeconds()).padStart(2, '0');
+            const postMealTimeStr = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+            
+            console.log(`餐食时间: ${mealPoint.x}, 餐后两小时时间: ${postMealTimeStr}`);
+            
+            // 在血糖数据中查找餐后两小时时间点的血糖值
+            let postMealIndex = -1;
+            let postMealGlucoseValue = null;
+            
+            // 尝试精确匹配
+            postMealIndex = labels.indexOf(postMealTimeStr);
+            
+            // 如果精确匹配失败，尝试找到最接近的时间点（前后10分钟内）
+            if (postMealIndex === -1) {
+                console.log(`精确匹配失败，尝试模糊匹配餐后时间: ${postMealTimeStr}`);
+                const postMealDateTime = new Date(postMealTimeStr);
+                
+                for (let i = 0; i < labels.length; i++) {
+                    const labelDateTime = new Date(labels[i]);
+                    const timeDiff = Math.abs(labelDateTime - postMealDateTime);
+                    const timeDiffMinutes = timeDiff / (1000 * 60);
+                    
+                    if (timeDiffMinutes <= 10) { // 10分钟内认为匹配
+                        postMealIndex = i;
+                        postMealGlucoseValue = values[i];
+                        console.log(`找到餐后血糖模糊匹配: 索引${i}, 时间差${timeDiffMinutes.toFixed(1)}分钟`);
+                        break;
+                    }
+                }
+            } else {
+                postMealGlucoseValue = values[postMealIndex];
+            }
+            
+            if (postMealIndex !== -1 && postMealGlucoseValue !== null) {
+                // 将餐后血糖图标放置在血糖曲线上方，与餐食图标错开显示
+                const postMealIndexInArray = postMealDataPoints.length;
+                const offsetValue = postMealGlucoseValue + (1.2 + (postMealIndexInArray % 3) * 0.4); // 错开显示，避免重叠
+                const dataPoint = {
+                    x: labels[postMealIndex], // 使用血糖数据的时间点
+                    y: offsetValue, // 调整后的Y坐标，在血糖曲线上方
+                    originalY: postMealGlucoseValue, // 原始血糖值，用于显示
+                    mealCarbs: mealPoint.carbs, // 关联的餐食碳水数据
+                    mealEventType: mealPoint.event_type, // 关联的餐食类型
+                    mealTime: mealPoint.x, // 原始餐食时间
+                    postMealTime: postMealTimeStr, // 餐后时间
+                    type: 'post_meal' // 标识为餐后血糖数据点
+                };
+                postMealDataPoints.push(dataPoint);
+                console.log(`添加餐后血糖数据点:`, dataPoint);
+            } else {
+                console.log(`未找到餐后两小时的血糖数据，餐食时间: ${mealPoint.x}`);
+            }
+        });
+        
         console.log('最终餐食数据点:', mealDataPoints);
         console.log('最终运动数据点:', activityDataPoints);
+        console.log('最终餐后血糖数据点:', postMealDataPoints);
         
         console.log('开始创建图表，餐食数据点数量:', mealDataPoints.length);
         console.log('开始创建图表，运动数据点数量:', activityDataPoints.length);
+        console.log('开始创建图表，餐后血糖数据点数量:', postMealDataPoints.length);
         console.log('餐食数据点示例:', mealDataPoints.slice(0, 2));
         console.log('运动数据点示例:', activityDataPoints.slice(0, 2));
+        console.log('餐后血糖数据点示例:', postMealDataPoints.slice(0, 2));
         
         // 创建自定义插件来绘制垂直虚线
         const verticalLinePlugin = {
@@ -969,7 +1042,8 @@
                 // 合并所有需要绘制虚线的数据点
                 const allDataPoints = [
                     ...mealDataPoints.map(point => ({...point, type: 'meal', color: '#fd7e14'})),
-                    ...activityDataPoints.map(point => ({...point, type: 'activity', color: '#20c997'}))
+                    ...activityDataPoints.map(point => ({...point, type: 'activity', color: '#20c997'})),
+                    ...postMealDataPoints.map(point => ({...point, type: 'post_meal', color: '#dc3545'}))
                 ];
                 
                 allDataPoints.forEach(dataPoint => {
@@ -1044,6 +1118,16 @@
                     pointHoverRadius: 12,
                     pointStyle: 'rectRot',
                     rotation: 45
+                }, {
+                    label: '餐后血糖',
+                    data: postMealDataPoints,
+                    backgroundColor: '#dc3545',
+                    borderColor: '#dc3545',
+                    showLine: false,
+                    pointRadius: 10,
+                    pointHoverRadius: 12,
+                    pointStyle: 'star',
+                    rotation: 0
                 }]
             },
             options: {
@@ -1130,6 +1214,9 @@
                                 } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
                                     console.log('返回运动标题');
                                     return `🏃 运动记录`;
+                                } else if (datasetIndex === 5 && dataPoint && dataPoint.originalY !== undefined) {
+                                    console.log('返回餐后血糖标题');
+                                    return `⭐ 餐后血糖`;
                                 }
                                 
                                 console.log('返回默认标题:', dataset.label);
@@ -1194,6 +1281,17 @@
                                     
                                     // 临时返回简单字符串进行测试
                                     return simpleResult;
+                                } else if (datasetIndex === 5 && dataPoint && dataPoint.originalY !== undefined) {
+                                    console.log('=== 餐后血糖工具提示调试 ===');
+                                    console.log('数据点:', dataPoint);
+                                    
+                                    return [
+                                        `餐后血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`,
+                                        `对应餐食: ${dataPoint.mealCarbs}g碳水`,
+                                        `餐食类型: ${dataPoint.mealEventType}`,
+                                        `餐食时间: ${dataPoint.mealTime}`,
+                                        `测量时间: ${dataPoint.postMealTime}`
+                                    ];
                                 }
                                 
                                 const timeLabel = context.label;
