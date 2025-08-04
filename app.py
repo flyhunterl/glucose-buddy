@@ -1770,12 +1770,10 @@ class NightscoutWebMonitor:
             activity_data = self.get_activity_data_from_db(start_date=start_date, end_date=end_date)
             meter_data = self.get_meter_data_from_db(start_date=start_date, end_date=end_date)
             
-            # 应用排除时间段过滤
+            # 应用排除时间段过滤 - 只排除CGM血糖数据，保留其他数据
             if exclude_times:
                 glucose_data = self.filter_data_by_exclude_times(glucose_data, exclude_times)
-                treatment_data = self.filter_data_by_exclude_times(treatment_data, exclude_times)
-                activity_data = self.filter_data_by_exclude_times(activity_data, exclude_times)
-                meter_data = self.filter_data_by_exclude_times(meter_data, exclude_times)
+                # 注意：不排除treatment_data（餐食数据）、activity_data（运动数据）和meter_data（指尖血糖数据）
             
             if not glucose_data:
                 return {
@@ -1885,9 +1883,7 @@ class NightscoutWebMonitor:
             cv_data = self.calculate_glucose_cv(glucose_values)
             cv = cv_data.get("cv_percent", 0)
 
-            # 计算指尖血糖统计
-            meter_avg = sum(meter_values) / len(meter_values) if meter_values else 0
-            meter_count = len(meter_values)
+            # 注意：指尖血糖数据不参与统计概览计算，仅在每日记录中显示
 
             # 计算空腹和餐后血糖
             fasting_values = []
@@ -2090,8 +2086,6 @@ class NightscoutWebMonitor:
                     'in_range_percentage': round(in_range_percentage, 1),
                     'fasting_avg': round(fasting_avg, 1),
                     'postprandial_avg': round(postprandial_avg, 1),
-                    'meter_avg': round(meter_avg, 1),
-                    'meter_count': meter_count,
                     'total_activity_duration': total_activity_duration,
                     'activity_count': len(activity_data)
                 },
