@@ -910,6 +910,7 @@
                         originalY: glucoseValue, // 原始血糖值，用于显示
                         duration: activity.duration,
                         event_type: activity.event_type || '运动',
+                        notes: activity.notes || '', // 添加备注字段
                         original_time: activityTime // 原始运动时间，用于调试
                     };
                     activityDataPoints.push(dataPoint);
@@ -1073,26 +1074,34 @@
                         padding: window.innerWidth < 768 ? 8 : 12,
                         callbacks: {
                             title: function(tooltipItems) {
-                                console.log('Tooltip title callback called, tooltipItems:', tooltipItems);
+                                console.log('=== Title回调调用 ===');
+                                console.log('tooltipItems:', tooltipItems);
+                                
+                                if (!tooltipItems || tooltipItems.length === 0) {
+                                    console.log('tooltipItems为空');
+                                    return '';
+                                }
+                                
                                 const tooltipItem = tooltipItems[0];
-                                if (!tooltipItem) return '';
+                                console.log('tooltipItem:', tooltipItem);
                                 
                                 const datasetIndex = tooltipItem.datasetIndex;
                                 const dataIndex = tooltipItem.dataIndex;
                                 const dataset = tooltipItem.chart.data.datasets[datasetIndex];
                                 const dataPoint = dataset.data[dataIndex];
                                 
-                                console.log('Dataset index:', datasetIndex, 'Data index:', dataIndex, 'Data point:', dataPoint);
+                                console.log('datasetIndex:', datasetIndex, 'dataIndex:', dataIndex);
+                                console.log('dataPoint:', dataPoint);
                                 
                                 if (datasetIndex === 3 && dataPoint && dataPoint.originalY !== undefined) {
-                                    console.log('Showing meal tooltip');
+                                    console.log('返回餐食标题');
                                     return `🍽️ 餐食记录`;
                                 } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
-                                    console.log('Showing activity tooltip');
+                                    console.log('返回运动标题');
                                     return `🏃 运动记录`;
                                 }
                                 
-                                console.log('Showing default tooltip');
+                                console.log('返回默认标题:', dataset.label);
                                 return dataset.label;
                             },
                             label: function(context) {
@@ -1108,11 +1117,52 @@
                                         `血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`
                                     ];
                                 } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
-                                    return [
-                                        `时长: ${dataPoint.duration}分钟`,
-                                        `类型: ${dataPoint.event_type}`,
-                                        `血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`
-                                    ];
+                                    console.log('=== 运动工具提示调试 ===');
+                                    console.log('数据点:', dataPoint);
+                                    
+                                    const exerciseType = dataPoint.event_type || '运动';
+                                    const exerciseNotes = dataPoint.notes || '';
+                                    
+                                    console.log('运动类型:', exerciseType);
+                                    console.log('运动备注:', exerciseNotes);
+                                    
+                                    // 构建显示内容，与运动记录表格保持一致
+                                    const durationDisplay = dataPoint.duration > 0 ? `${dataPoint.duration}分钟` : '';
+                                    const typeDisplay = exerciseType;
+                                    
+                                    // 如果event_type中包含" - "，则前面部分为类型，后面部分为备注
+                                    let notesDisplay = exerciseNotes;
+                                    if (!notesDisplay && exerciseType.includes(' - ')) {
+                                        const parts = exerciseType.split(' - ');
+                                        if (parts.length > 1) {
+                                            notesDisplay = parts.slice(1).join(' - ');
+                                        }
+                                    }
+                                    
+                                    console.log('最终备注显示:', notesDisplay);
+                                    
+                                    // 先尝试简单的字符串返回
+                                    let simpleResult = `时长: ${durationDisplay} | 类型: ${typeDisplay}`;
+                                    if (notesDisplay && notesDisplay.trim() !== '') {
+                                        simpleResult += ` | 备注: ${notesDisplay}`;
+                                    }
+                                    simpleResult += ` | 血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`;
+                                    
+                                    console.log('简单结果字符串:', simpleResult);
+                                    
+                                    // 再尝试数组格式
+                                    const result = [`时长: ${durationDisplay}`, `类型: ${typeDisplay}`];
+                                    if (notesDisplay && notesDisplay.trim() !== '') {
+                                        result.push(`备注: ${notesDisplay}`);
+                                        console.log('添加备注行:', notesDisplay);
+                                    } else {
+                                        console.log('备注为空，不添加');
+                                    }
+                                    
+                                    console.log('数组结果:', result);
+                                    
+                                    // 临时返回简单字符串进行测试
+                                    return simpleResult;
                                 }
                                 
                                 return `${dataset.label}: ${context.parsed.y.toFixed(1)} mmol/L`;
