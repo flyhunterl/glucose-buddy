@@ -463,9 +463,20 @@
         // 加载血糖数据
         fetch(`/api/glucose-data${urlParams}`)
             .then(response => response.json())
-            .then(data => {
-                updateGlucoseTable(data);
-                updateGlucoseChart(data);
+            .then(glucoseData => {
+                updateGlucoseTable(glucoseData);
+                
+                // 并行加载餐食和运动数据，然后更新图表
+                Promise.all([
+                    fetch(`/api/treatment-data${urlParams}`).then(response => response.json()),
+                    fetch(`/api/activity-data${urlParams}`).then(response => response.json())
+                ]).then(([treatmentData, activityData]) => {
+                    updateGlucoseChart(glucoseData, treatmentData, activityData);
+                }).catch(error => {
+                    console.error('加载餐食或运动数据失败:', error);
+                    // 即使餐食/运动数据加载失败，也只显示血糖数据
+                    updateGlucoseChart(glucoseData, [], []);
+                });
             })
             .catch(error => {
                 console.error('加载血糖数据失败:', error);
@@ -794,15 +805,166 @@
     }
     
     // 更新血糖图表
-    function updateGlucoseChart(data) {
+    function updateGlucoseChart(glucoseData, treatmentData = [], activityData = []) {
         const ctx = document.getElementById('glucoseChart').getContext('2d');
         
         if (glucoseChart) {
             glucoseChart.destroy();
         }
         
-        const labels = data.map(item => item.time).reverse();
-        const values = data.map(item => item.value_mmol).reverse();
+        const labels = glucoseData.map(item => item.time).reverse();
+        const values = glucoseData.map(item => item.value_mmol).reverse();
+        
+        // 处理餐食数据 - 转换为图表数据点
+        const mealDataPoints = [];
+        console.log('餐食数据:', treatmentData);
+        console.log('血糖时间标签:', labels);
+        treatmentData.forEach(meal => {
+            if (meal.carbs > 0) { // 只显示有碳水化合物的餐食记录
+                const mealTime = meal.time;
+                console.log(`餐食时间: ${mealTime}, 是否存在精确匹配: ${labels.includes(mealTime)}`);
+                
+                // 尝试精确匹配
+                let mealIndex = labels.indexOf(mealTime);
+                let glucoseValue = null;
+                
+                // 如果精确匹配失败，尝试找到最接近的时间点（前后5分钟内）
+                if (mealIndex === -1) {
+                    console.log(`精确匹配失败，尝试模糊匹配餐食时间: ${mealTime}`);
+                    const mealDateTime = new Date(mealTime);
+                    
+                    for (let i = 0; i < labels.length; i++) {
+                        const labelDateTime = new Date(labels[i]);
+                        const timeDiff = Math.abs(labelDateTime - mealDateTime);
+                        const timeDiffMinutes = timeDiff / (1000 * 60);
+                        
+                        if (timeDiffMinutes <= 5) { // 5分钟内认为匹配
+                            mealIndex = i;
+                            glucoseValue = values[i];
+                            console.log(`找到模糊匹配: 索引${i}, 时间差${timeDiffMinutes.toFixed(1)}分钟`);
+                            break;
+                        }
+                    }
+                } else {
+                    glucoseValue = values[mealIndex];
+                }
+                
+                if (mealIndex !== -1 && glucoseValue !== null) {
+                    // 将餐食图标放置在血糖曲线上方，错开显示
+                    const mealIndexInArray = mealDataPoints.length;
+                    const offsetValue = glucoseValue + (0.8 + (mealIndexInArray % 3) * 0.4); // 错开显示，避免重叠
+                    const dataPoint = {
+                        x: labels[mealIndex], // 使用血糖数据的时间点
+                        y: offsetValue, // 调整后的Y坐标，在血糖曲线上方
+                        originalY: glucoseValue, // 原始血糖值，用于显示
+                        carbs: meal.carbs,
+                        event_type: meal.event_type || '餐食',
+                        original_time: mealTime // 原始餐食时间，用于调试
+                    };
+                    mealDataPoints.push(dataPoint);
+                    console.log(`添加餐食数据点:`, dataPoint);
+                }
+            }
+        });
+        
+        // 处理运动数据 - 转换为图表数据点
+        const activityDataPoints = [];
+        console.log('运动数据:', activityData);
+        activityData.forEach(activity => {
+            if (activity.duration > 0) { // 只显示有时长的运动记录
+                const activityTime = activity.time;
+                console.log(`运动时间: ${activityTime}, 是否存在精确匹配: ${labels.includes(activityTime)}`);
+                
+                // 尝试精确匹配
+                let activityIndex = labels.indexOf(activityTime);
+                let glucoseValue = null;
+                
+                // 如果精确匹配失败，尝试找到最接近的时间点（前后5分钟内）
+                if (activityIndex === -1) {
+                    console.log(`精确匹配失败，尝试模糊匹配运动时间: ${activityTime}`);
+                    const activityDateTime = new Date(activityTime);
+                    
+                    for (let i = 0; i < labels.length; i++) {
+                        const labelDateTime = new Date(labels[i]);
+                        const timeDiff = Math.abs(labelDateTime - activityDateTime);
+                        const timeDiffMinutes = timeDiff / (1000 * 60);
+                        
+                        if (timeDiffMinutes <= 5) { // 5分钟内认为匹配
+                            activityIndex = i;
+                            glucoseValue = values[i];
+                            console.log(`找到模糊匹配: 索引${i}, 时间差${timeDiffMinutes.toFixed(1)}分钟`);
+                            break;
+                        }
+                    }
+                } else {
+                    glucoseValue = values[activityIndex];
+                }
+                
+                if (activityIndex !== -1 && glucoseValue !== null) {
+                    // 将运动图标放置在血糖曲线下方，错开显示
+                    const activityIndexInArray = activityDataPoints.length;
+                    const offsetValue = Math.max(0.5, glucoseValue - (0.8 + (activityIndexInArray % 3) * 0.4)); // 错开显示，避免重叠，且不低于0.5
+                    const dataPoint = {
+                        x: labels[activityIndex], // 使用血糖数据的时间点
+                        y: offsetValue, // 调整后的Y坐标，在血糖曲线下方
+                        originalY: glucoseValue, // 原始血糖值，用于显示
+                        duration: activity.duration,
+                        event_type: activity.event_type || '运动',
+                        original_time: activityTime // 原始运动时间，用于调试
+                    };
+                    activityDataPoints.push(dataPoint);
+                    console.log(`添加运动数据点:`, dataPoint);
+                }
+            }
+        });
+        
+        console.log('最终餐食数据点:', mealDataPoints);
+        console.log('最终运动数据点:', activityDataPoints);
+        
+        console.log('开始创建图表，餐食数据点数量:', mealDataPoints.length);
+        console.log('开始创建图表，运动数据点数量:', activityDataPoints.length);
+        console.log('餐食数据点示例:', mealDataPoints.slice(0, 2));
+        console.log('运动数据点示例:', activityDataPoints.slice(0, 2));
+        
+        // 创建自定义插件来绘制垂直虚线
+        const verticalLinePlugin = {
+            id: 'verticalLinePlugin',
+            afterDraw: function(chart) {
+                const ctx = chart.ctx;
+                const xScale = chart.scales.x;
+                const yScale = chart.scales.y;
+                
+                // 合并所有需要绘制虚线的数据点
+                const allDataPoints = [
+                    ...mealDataPoints.map(point => ({...point, type: 'meal', color: '#fd7e14'})),
+                    ...activityDataPoints.map(point => ({...point, type: 'activity', color: '#20c997'}))
+                ];
+                
+                allDataPoints.forEach(dataPoint => {
+                    // 找到对应时间点的索引
+                    const xIndex = labels.indexOf(dataPoint.x);
+                    if (xIndex !== -1) {
+                        const x = xScale.getPixelForValue(xIndex);
+                        const y = yScale.getPixelForValue(dataPoint.y);
+                        const bottomY = chart.scales.y.bottom; // 图表底部
+                        
+                        // 绘制垂直虚线
+                        ctx.save();
+                        ctx.strokeStyle = dataPoint.color;
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([5, 5]); // 虚线样式
+                        ctx.globalAlpha = 0.6;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x, bottomY);
+                        ctx.stroke();
+                        
+                        ctx.restore();
+                    }
+                });
+            }
+        };
         
         glucoseChart = new Chart(ctx, {
             type: 'line',
@@ -830,14 +992,34 @@
                     borderDash: [5, 5],
                     pointRadius: 0,
                     fill: false
+                }, {
+                    label: '餐食记录',
+                    data: mealDataPoints,
+                    backgroundColor: '#fd7e14',
+                    borderColor: '#fd7e14',
+                    showLine: false,
+                    pointRadius: 10,
+                    pointHoverRadius: 12,
+                    pointStyle: 'triangle',
+                    rotation: 0
+                }, {
+                    label: '运动记录',
+                    data: activityDataPoints,
+                    backgroundColor: '#20c997',
+                    borderColor: '#20c997',
+                    showLine: false,
+                    pointRadius: 10,
+                    pointHoverRadius: 12,
+                    pointStyle: 'rectRot',
+                    rotation: 45
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: {
-                    intersect: false,
-                    mode: 'index'
+                    intersect: true,
+                    mode: 'nearest'
                 },
                 scales: {
                     y: {
@@ -867,6 +1049,8 @@
                     }
                 },
                 plugins: {
+                    // 注册自定义插件
+                    ...[verticalLinePlugin],
                     legend: {
                         display: true,
                         position: window.innerWidth < 768 ? 'bottom' : 'top',
@@ -886,7 +1070,68 @@
                         bodyFont: {
                             size: window.innerWidth < 768 ? 11 : 13
                         },
-                        padding: window.innerWidth < 768 ? 8 : 12
+                        padding: window.innerWidth < 768 ? 8 : 12,
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                console.log('Tooltip title callback called, tooltipItems:', tooltipItems);
+                                const tooltipItem = tooltipItems[0];
+                                if (!tooltipItem) return '';
+                                
+                                const datasetIndex = tooltipItem.datasetIndex;
+                                const dataIndex = tooltipItem.dataIndex;
+                                const dataset = tooltipItem.chart.data.datasets[datasetIndex];
+                                const dataPoint = dataset.data[dataIndex];
+                                
+                                console.log('Dataset index:', datasetIndex, 'Data index:', dataIndex, 'Data point:', dataPoint);
+                                
+                                if (datasetIndex === 3 && dataPoint && dataPoint.originalY !== undefined) {
+                                    console.log('Showing meal tooltip');
+                                    return `🍽️ 餐食记录`;
+                                } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
+                                    console.log('Showing activity tooltip');
+                                    return `🏃 运动记录`;
+                                }
+                                
+                                console.log('Showing default tooltip');
+                                return dataset.label;
+                            },
+                            label: function(context) {
+                                const datasetIndex = context.datasetIndex;
+                                const dataIndex = context.dataIndex;
+                                const dataset = context.chart.data.datasets[datasetIndex];
+                                const dataPoint = dataset.data[dataIndex];
+                                
+                                if (datasetIndex === 3 && dataPoint && dataPoint.originalY !== undefined) {
+                                    return [
+                                        `碳水: ${dataPoint.carbs}g`,
+                                        `类型: ${dataPoint.event_type}`,
+                                        `血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`
+                                    ];
+                                } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
+                                    return [
+                                        `时长: ${dataPoint.duration}分钟`,
+                                        `类型: ${dataPoint.event_type}`,
+                                        `血糖: ${dataPoint.originalY.toFixed(1)} mmol/L`
+                                    ];
+                                }
+                                
+                                return `${dataset.label}: ${context.parsed.y.toFixed(1)} mmol/L`;
+                            },
+                            afterLabel: function(context) {
+                                const datasetIndex = context.datasetIndex;
+                                const dataIndex = context.dataIndex;
+                                const dataset = context.chart.data.datasets[datasetIndex];
+                                const dataPoint = dataset.data[dataIndex];
+                                
+                                if (datasetIndex === 3 && dataPoint && dataPoint.originalY !== undefined) {
+                                    return `时间: ${dataPoint.original_time}`;
+                                } else if (datasetIndex === 4 && dataPoint && dataPoint.originalY !== undefined) {
+                                    return `时间: ${dataPoint.original_time}`;
+                                }
+                                
+                                return '';
+                            }
+                        }
                     }
                 }
             }
