@@ -16,9 +16,9 @@
                 <div class="row align-items-center">
                     <div class="col-12 col-xl-7 mb-3 mb-xl-0">
                         <div class="btn-group w-100" role="group">
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(1)">今日</button>
+                            <button type="button" class="btn btn-primary active btn-sm" onclick="loadData(1)">今日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(3)">3日</button>
-                            <button type="button" class="btn btn-primary active btn-sm" onclick="loadData(7)">7日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(7)">7日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(15)">15日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(30)">30日</button>
                             <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(60)">60日</button>
@@ -369,7 +369,7 @@
         document.getElementById('startDate').value = sevenDaysAgo.toISOString().split('T')[0];
 
         // 先同步数据，然后加载显示
-        syncDataAndLoad();
+        syncDataAndLoadToday();
         
         // 更新未读消息数量
         updateUnreadCountIndicator();
@@ -403,6 +403,37 @@
             showNotification('同步失败: ' + error.message, 'warning');
             // 同步失败也加载本地数据
             loadData(7);
+        });
+    }
+    
+    // 同步数据并加载今日数据（页面加载时使用）
+    function syncDataAndLoadToday() {
+        // 静默同步，不显示成功提示
+        fetch('/api/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({days: 1})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // 只在控制台记录成功信息，不显示通知
+                console.log(`同步成功！获取到 ${data.glucose_count} 条血糖数据和 ${data.treatment_count} 条治疗数据`);
+                // 同步成功后加载数据
+                loadData(1);
+            } else {
+                showNotification('同步失败: ' + data.error, 'warning');
+                // 即使同步失败也尝试加载本地数据
+                loadData(1);
+            }
+        })
+        .catch(error => {
+            console.error('同步失败:', error);
+            showNotification('同步失败: ' + error.message, 'warning');
+            // 同步失败也加载本地数据
+            loadData(1);
         });
     }
     
@@ -1165,7 +1196,8 @@
                                     return simpleResult;
                                 }
                                 
-                                return `${dataset.label}: ${context.parsed.y.toFixed(1)} mmol/L`;
+                                const timeLabel = context.label;
+                                return `${dataset.label}: ${context.parsed.y.toFixed(1)} mmol/L\n时间: ${timeLabel}`;
                             },
                             afterLabel: function(context) {
                                 const datasetIndex = context.datasetIndex;
