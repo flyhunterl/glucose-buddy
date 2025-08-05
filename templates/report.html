@@ -22,12 +22,12 @@
                     </div>
                 </div>
                 <div class="card-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <p><strong>报告日期范围：</strong> <span id="report-date-range">{{ start_date }} 至 {{ end_date }}</span></p>
-                        </div>
-                        <div class="col-md-6">
-                            <p><strong>生成时间：</strong> <span id="report-generation-time">{{ generation_time }}</span></p>
+                    <div class="row report-info-row">
+                        <div class="col-12">
+                            <div class="report-info-container">
+                                <span class="report-date-info"><strong>报告日期范围：</strong> <span id="report-date-range">{{ start_date }} 至 {{ end_date }}</span></span>
+                                <span class="report-time-info"><strong>生成时间：</strong> <span id="report-generation-time">{{ generation_time }}</span></span>
+                            </div>
                         </div>
                     </div>
                     <!-- 排除时间段显示 -->
@@ -584,7 +584,7 @@
                     <div class="form-check">
                         <input class="form-check-input" type="radio" name="printMode" id="printModeBlackWhite" value="blackwhite" checked>
                         <label class="form-check-label" for="printModeBlackWhite">
-                            <i class="fas fa-adjust"></i> 黑白打印（推荐）
+                            <i class="fas fa-adjust"></i> 黑白打印
                         </label>
                     </div>
                     <div class="form-check">
@@ -789,6 +789,56 @@
         max-height: none !important;
     }
     
+    /* 报告信息区域 - 同一行显示并缩小行距 */
+    .report-info-row .report-info-container {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        font-size: 8pt !important;
+        line-height: 1.2 !important;
+        margin-bottom: 0.3rem !important;
+    }
+    
+    .report-info-row .report-date-info,
+    .report-info-row .report-time-info {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    .report-info-row .report-date-info strong,
+    .report-info-row .report-time-info strong {
+        font-size: 8pt !important;
+        font-weight: 600 !important;
+    }
+    
+    .report-info-row .report-date-info span,
+    .report-info-row .report-time-info span {
+        font-size: 8pt !important;
+    }
+    
+    /* 排除时间段信息缩小行距 */
+    #excludeTimeInfo {
+        font-size: 8pt !important;
+        line-height: 1.2 !important;
+        margin-top: 0.2rem !important;
+    }
+    
+    #excludeTimeInfo .alert {
+        padding: 0.3rem 0.5rem !important;
+        margin-bottom: 0.2rem !important;
+        font-size: 8pt !important;
+        line-height: 1.2 !important;
+    }
+    
+    #excludeTimeInfo .alert i {
+        font-size: 8pt !important;
+    }
+    
+    #excludeTimeInfo .alert div {
+        font-size: 8pt !important;
+        line-height: 1.2 !important;
+    }
+
     /* 统计概览打印样式 - 每行4个，分两行显示 */
     .print-summary .col-md-3 {
         width: 25% !important;
@@ -816,7 +866,7 @@
         display: block !important;
     }
 
-    /* 治疗方案打印样式 - 紧凑布局 */
+    /* 治疗方案打印样式 - 极简紧凑布局 */
     .print-treatment .screen-medications,
     .print-treatment .screen-insulin {
         display: none !important;
@@ -827,24 +877,30 @@
         display: block !important;
     }
     
-    /* 药物打印布局 - 一行显示3-4个 */
+    /* 隐藏副标题 */
+    .print-treatment h5 {
+        display: none !important;
+    }
+    
+    /* 药物打印布局 - 更紧凑的单行显示 */
     .print-treatment .medication-row {
         display: flex !important;
         flex-wrap: wrap !important;
-        gap: 0.5rem 1.5rem !important;
-        margin-bottom: 0.5rem !important;
-        line-height: 1.2 !important;
+        gap: 0.3rem 1rem !important;
+        margin-bottom: 0.3rem !important;
+        line-height: 1.1 !important;
     }
     
-    /* 药物样式 - 统一处理 */
+    /* 药物样式 - 极小字体 */
     .print-treatment .medication-item {
         display: inline-block !important;
-        font-size: 9pt !important;
+        font-size: 7pt !important;
         border: 1px solid #dee2e6 !important;
-        padding: 0.2rem 0.4rem !important;
+        padding: 0.1rem 0.2rem !important;
         background-color: #f8f9fa !important;
-        border-radius: 3px !important;
+        border-radius: 2px !important;
         margin: 0 !important;
+        min-width: 0 !important;
     }
     
     /* 黑白模式下覆盖药物边框颜色 */
@@ -853,37 +909,40 @@
     }
     
     .print-treatment .medication-item strong {
-        font-weight: 600 !important;
-        margin-right: 0.3rem !important;
+        font-weight: 500 !important;
+        margin-right: 0.2rem !important;
+        font-size: 7pt !important;
     }
     
     .print-treatment .med-dosage {
         font-weight: normal !important;
-        margin-right: 0.3rem !important;
+        margin-right: 0.2rem !important;
+        font-size: 6.5pt !important;
     }
     
     .print-treatment .med-usage {
-        font-size: 8pt !important;
+        font-size: 6pt !important;
         font-weight: normal !important;
     }
     
-    /* 胰岛素打印布局 - 紧凑一行显示 */
+    /* 胰岛素打印布局 - 极紧凑单行显示 */
     .print-treatment .insulin-row {
         display: flex !important;
-        gap: 1rem 2rem !important;
-        margin-bottom: 0.5rem !important;
+        gap: 0.8rem 1.5rem !important;
+        margin-bottom: 0.3rem !important;
         align-items: center !important;
     }
     
-    /* 胰岛素样式 - 统一处理 */
+    /* 胰岛素样式 - 极小字体 */
     .print-treatment .insulin-item {
         display: inline-flex !important;
         align-items: center !important;
-        font-size: 9pt !important;
+        font-size: 7pt !important;
         border: 1px solid #b3d7ff !important;
-        padding: 0.2rem 0.4rem !important;
+        padding: 0.1rem 0.2rem !important;
         background-color: #e7f3ff !important;
-        border-radius: 3px !important;
+        border-radius: 2px !important;
+        min-width: 0 !important;
     }
     
     /* 黑白模式下覆盖胰岛素边框和背景色 */
@@ -893,20 +952,29 @@
     }
     
     .print-treatment .insulin-label {
-        font-weight: 600 !important;
-        margin-right: 0.3rem !important;
+        font-weight: 500 !important;
+        margin-right: 0.2rem !important;
+        font-size: 7pt !important;
     }
     
     .print-treatment .insulin-value {
         font-weight: normal !important;
+        font-size: 7pt !important;
     }
     
-    /* 标题样式优化 */
+    /* 标题样式优化 - 更小更紧凑 */
     .print-treatment h6 {
-        font-size: 11pt !important;
-        margin-bottom: 0.8rem !important;
+        font-size: 9pt !important;
+        margin-bottom: 0.4rem !important;
         border-bottom: 1px solid #dee2e6 !important;
-        padding-bottom: 0.3rem !important;
+        padding-bottom: 0.1rem !important;
+        margin-top: 0.2rem !important;
+    }
+    
+    /* 药物治疗和胰岛素治疗副标题 - 再缩小一号 */
+    .print-treatment .text-primary {
+        font-size: 8pt !important;
+        margin-bottom: 0.2rem !important;
     }
     
     /* 黑白模式下覆盖标题边框颜色 */
@@ -914,13 +982,24 @@
         border-color: #000000 !important;
     }
     
-    /* 减少整体间距 */
+    /* 大幅减少整体间距 */
     .print-treatment .mb-4 {
-        margin-bottom: 1rem !important;
+        margin-bottom: 0.5rem !important;
     }
     
     .print-treatment .mb-3 {
-        margin-bottom: 0.8rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+    
+    /* 治疗方案整体容器最小化 */
+    .print-treatment {
+        font-size: 7pt !important;
+        line-height: 1.1 !important;
+    }
+    
+    /* 移除不必要的内边距 */
+    .print-treatment .card-body {
+        padding: 0.5rem !important;
     }
     
     /* 页脚样式 */
