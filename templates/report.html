@@ -714,10 +714,51 @@
     }
 }
 
-/* 彩色打印样式 - 保持原有颜色 */
+/* 彩色打印样式 - 保持原有颜色，去除灰色覆盖层 */
 @media print {
     body.print-color {
-        /* 保持原有的彩色样式 */
+        /* 强制背景为纯白色，去除灰色覆盖层 */
+        background-color: #ffffff !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    /* 确保所有元素都有白色背景 */
+    body.print-color *,
+    body.print-color .card,
+    body.print-color .card-header,
+    body.print-color .card-body,
+    body.print-color .table,
+    body.print-color .table td,
+    body.print-color .table th,
+    body.print-color .container,
+    body.print-color .row,
+    body.print-color .col {
+        background-color: #ffffff !important;
+        background: #ffffff !important;
+        background-image: none !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    /* 保持原有的文字颜色 */
+    body.print-color *,
+    body.print-color .card,
+    body.print-color .card-header,
+    body.print-color .card-body,
+    body.print-color .table,
+    body.print-color .table td,
+    body.print-color .table th {
+        color: inherit !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    /* 移除可能造成灰色覆盖的阴影和渐变 */
+    body.print-color * {
+        box-shadow: none !important;
+        background-image: none !important;
+        background-gradient: none !important;
     }
 }
 
