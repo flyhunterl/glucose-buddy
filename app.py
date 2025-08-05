@@ -39,7 +39,7 @@ class NightscoutWebMonitor:
         
     def load_config(self):
         """加载配置文件"""
-        config_path = "config.toml"
+        config_path = "/app/config.toml"
         default_config = {
             "basic": {
                 "enable": True,
@@ -79,6 +79,13 @@ class NightscoutWebMonitor:
             "auth": {
                 "enable": False,
                 "password": ""
+            },
+            "treatment_plan": {
+                "medications": [],
+                "insulin_enabled": False,
+                "insulin_dosage": 0,
+                "insulin_frequency": "",
+                "insulin_custom_frequency": ""
             }
         }
         
@@ -89,25 +96,36 @@ class NightscoutWebMonitor:
                 # 合并默认配置
                 for section, values in default_config.items():
                     if section not in config:
-                        config[section] = values
+                        config[section] = values.copy()
                     else:
                         for key, value in values.items():
                             if key not in config[section]:
                                 config[section][key] = value
+                
+                # 特别确保 treatment_plan 字段存在
+                if "treatment_plan" not in config:
+                    config["treatment_plan"] = default_config["treatment_plan"].copy()
+                else:
+                    for key, value in default_config["treatment_plan"].items():
+                        if key not in config["treatment_plan"]:
+                            config["treatment_plan"][key] = value
+                
                 return config
             else:
-                return default_config
+                return default_config.copy()
         except Exception as e:
             logger.error(f"加载配置文件失败: {e}")
-            return default_config
+            return default_config.copy()
 
     def save_config(self, config):
         """保存配置文件"""
         try:
             import toml
-            with open("config.toml", "w", encoding="utf-8") as f:
+            config_path = "/app/config.toml"
+            with open(config_path, "w", encoding="utf-8") as f:
                 toml.dump(config, f)
             self.config = config
+            logger.info(f"配置已保存到 {config_path}")
             return True
         except Exception as e:
             logger.error(f"保存配置文件失败: {e}")
@@ -1206,15 +1224,45 @@ class NightscoutWebMonitor:
         bmi_data = self.calculate_bmi()
         body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
         
+        # 获取治疗方案数据
+        treatment_plan = self.config.get("treatment_plan", {})
+        medications = treatment_plan.get("medications", [])
+        insulin_enabled = treatment_plan.get("insulin_enabled", False)
+        insulin_dosage = treatment_plan.get("insulin_dosage", 0)
+        insulin_frequency = treatment_plan.get("insulin_frequency", "")
+        insulin_custom_frequency = treatment_plan.get("insulin_custom_frequency", "")
+        
         personal_info = []
         if bmi_data.get("bmi") > 0:
             personal_info.append(f"用户BMI为 {bmi_data['bmi']} ({bmi_data['status']})")
         if body_fat > 0:
             personal_info.append(f"体脂率为 {body_fat}%")
         
+        # 添加治疗方案信息
+        treatment_info = []
+        if medications:
+            medication_list = []
+            for med in medications:
+                med_info = f"{med['name']} {med['dosage']}{med['unit']}"
+                if med['usage']:
+                    med_info += f" ({med['usage']})"
+                medication_list.append(med_info)
+            treatment_info.append(f"药物治疗: {', '.join(medication_list)}")
+        
+        if insulin_enabled:
+            insulin_info = f"胰岛素治疗: 每次{insulin_dosage}单位, "
+            if insulin_frequency == "custom" and insulin_custom_frequency:
+                insulin_info += insulin_custom_frequency
+            elif insulin_frequency:
+                insulin_info += insulin_frequency
+            else:
+                insulin_info += "频率未设置"
+            treatment_info.append(insulin_info)
+        
         prompt_info = " ".join(personal_info)
+        treatment_prompt = " ".join(treatment_info) if treatment_info else "无特殊治疗方案"
 
-        prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info}
+        prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info} {treatment_prompt}
 
 血糖数据（mmol/L）：
 """
@@ -1363,14 +1411,44 @@ class NightscoutWebMonitor:
         """生成AI咨询的prompt"""
         bmi_data = self.calculate_bmi()
         body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
+        
+        # 获取治疗方案数据
+        treatment_plan = self.config.get("treatment_plan", {})
+        medications = treatment_plan.get("medications", [])
+        insulin_enabled = treatment_plan.get("insulin_enabled", False)
+        insulin_dosage = treatment_plan.get("insulin_dosage", 0)
+        insulin_frequency = treatment_plan.get("insulin_frequency", "")
+        insulin_custom_frequency = treatment_plan.get("insulin_custom_frequency", "")
 
         personal_info = []
         if bmi_data.get("bmi") > 0:
             personal_info.append(f"用户BMI为 {bmi_data['bmi']} ({bmi_data['status']})")
         if body_fat > 0:
             personal_info.append(f"体脂率为 {body_fat}%")
+        
+        # 添加治疗方案信息
+        treatment_info = []
+        if medications:
+            medication_list = []
+            for med in medications:
+                med_info = f"{med['name']} {med['dosage']}{med['unit']}"
+                if med['usage']:
+                    med_info += f" ({med['usage']})"
+                medication_list.append(med_info)
+            treatment_info.append(f"药物治疗: {', '.join(medication_list)}")
+        
+        if insulin_enabled:
+            insulin_info = f"胰岛素治疗: 每次{insulin_dosage}单位, "
+            if insulin_frequency == "custom" and insulin_custom_frequency:
+                insulin_info += insulin_custom_frequency
+            elif insulin_frequency:
+                insulin_info += insulin_frequency
+            else:
+                insulin_info += "频率未设置"
+            treatment_info.append(insulin_info)
             
         prompt_info = " ".join(personal_info)
+        treatment_prompt = " ".join(treatment_info) if treatment_info else "无特殊治疗方案"
 
         if include_data:
             glucose_mmol = []
@@ -1413,7 +1491,7 @@ class NightscoutWebMonitor:
                     "notes": entry.get("notes", "")
                 })
 
-            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。{prompt_info}
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。{prompt_info} {treatment_prompt}
 
 血糖数据（mmol/L, 最近20条）:
 """
@@ -1438,7 +1516,7 @@ class NightscoutWebMonitor:
 请用专业、简洁、易懂的语言回答，并提供可行的建议。如果数据不足以回答问题，请明确指出。
 """
         else:
-            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。{prompt_info}
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。{prompt_info} {treatment_prompt}
 
 用户问题: "{question}"
 
@@ -2128,7 +2206,17 @@ def messages_page():
 @app.route('/config')
 def config_page():
     """配置页面"""
-    return render_template('config.html', config=monitor.config)
+    # 确保 config 对象包含 treatment_plan 字段
+    config = monitor.config.copy()
+    if 'treatment_plan' not in config:
+        config['treatment_plan'] = {
+            'medications': [],
+            'insulin_enabled': False,
+            'insulin_dosage': 0,
+            'insulin_frequency': '',
+            'insulin_custom_frequency': ''
+        }
+    return render_template('config.html', config=config)
 
 @app.route('/api/glucose-data')
 def api_glucose_data():

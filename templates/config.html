@@ -97,6 +97,115 @@
                         </div>
                     </div>
 
+                    <!-- 治疗方案配置 -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="fas fa-pills"></i> 治疗方案配置
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <!-- 药物治疗 -->
+                            <div class="mb-4">
+                                <h6 class="mb-3">药物治疗</h6>
+                                <div id="medications-container">
+                                    <div class="medication-item mb-3 p-3 border rounded">
+                                        <div class="row align-items-center">
+                                            <div class="col-md-3">
+                                                <input type="text" class="form-control medication-name" 
+                                                       placeholder="药物名称" value="">
+                                            </div>
+                                            <div class="col-md-2">
+                                                <input type="text" class="form-control medication-dosage" 
+                                                       placeholder="剂量" value="">
+                                            </div>
+                                            <div class="col-md-2">
+                                                <input type="text" class="form-control medication-unit" 
+                                                       placeholder="单位" value="mg">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <select class="form-select medication-usage">
+                                                    <option value="">选择用法</option>
+                                                    <option value="一日三次">一日三次</option>
+                                                    <option value="早晚一次">早晚一次</option>
+                                                    <option value="每日一次">每日一次</option>
+                                                    <option value="每日随餐">每日随餐</option>
+                                                    <option value="custom">自定义</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <button type="button" class="btn btn-danger btn-sm remove-medication" 
+                                                        onclick="removeMedication(this)">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="row mt-2 custom-usage-row" style="display: none;">
+                                            <div class="col-md-12">
+                                                <input type="text" class="form-control medication-custom-usage" 
+                                                       placeholder="请输入自定义用法">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <button type="button" class="btn btn-outline-primary" onclick="addMedication()">
+                                        <i class="fas fa-plus"></i> 添加药物
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="clearMedications()">
+                                        <i class="fas fa-eraser"></i> 清空所有
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 胰岛素注射 -->
+                            <div class="mb-3">
+                                <h6 class="mb-3">胰岛素注射</h6>
+                                <div class="form-check form-switch mb-3">
+                                    <input class="form-check-input" type="checkbox" id="insulin-enabled" 
+                                           {% if config.treatment_plan.insulin_enabled %}checked{% endif %}>
+                                    <label class="form-check-label" for="insulin-enabled">
+                                        是否注射胰岛素
+                                    </label>
+                                </div>
+                                <div id="insulin-details" style="{% if not config.treatment_plan.insulin_enabled %}display: none;{% endif %}">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="insulin-dosage" class="form-label">注射剂量</label>
+                                                <input type="number" class="form-control" id="insulin-dosage" 
+                                                       value="{{ config.treatment_plan.insulin_dosage }}" 
+                                                       min="0" step="0.1" placeholder="单位">
+                                                <div class="form-text">每次注射的胰岛素剂量</div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="insulin-frequency" class="form-label">注射次数</label>
+                                                <select class="form-select" id="insulin-frequency">
+                                                    <option value="">选择注射次数</option>
+                                                    <option value="每日一次" {% if config.treatment_plan.insulin_frequency == '每日一次' %}selected{% endif %}>每日一次</option>
+                                                    <option value="每日两次" {% if config.treatment_plan.insulin_frequency == '每日两次' %}selected{% endif %}>每日两次</option>
+                                                    <option value="每日三次" {% if config.treatment_plan.insulin_frequency == '每日三次' %}selected{% endif %}>每日三次</option>
+                                                    <option value="每日四次" {% if config.treatment_plan.insulin_frequency == '每日四次' %}selected{% endif %}>每日四次</option>
+                                                    <option value="custom">自定义</option>
+                                                </select>
+                                                <div class="form-text">每日注射胰岛素的次数</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row custom-frequency-row" style="{% if config.treatment_plan.insulin_frequency != 'custom' %}display: none;{% endif %}">
+                                        <div class="col-md-12">
+                                            <input type="text" class="form-control" id="insulin-custom-frequency" 
+                                                   value="{{ config.treatment_plan.insulin_custom_frequency }}" 
+                                                   placeholder="请输入自定义注射次数">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- AI 配置 -->
                     <div class="card mb-4">
                         <div class="card-header">
@@ -386,6 +495,9 @@
             return;
         }
 
+        // 获取药物治疗数据
+        const medications = getMedicationsData();
+        
         const config = {
             auth: {
                 enable: document.getElementById('auth-enable').checked,
@@ -425,6 +537,13 @@
                 smtp_password: document.getElementById('smtp-password').value.trim(),
                 from_email: document.getElementById('from-email').value.trim(),
                 to_emails: document.getElementById('to-emails').value.split(',').map(e => e.trim()).filter(e => e)
+            },
+            treatment_plan: {
+                medications: medications,
+                insulin_enabled: document.getElementById('insulin-enabled').checked,
+                insulin_dosage: parseFloat(document.getElementById('insulin-dosage').value) || 0,
+                insulin_frequency: document.getElementById('insulin-frequency').value,
+                insulin_custom_frequency: document.getElementById('insulin-custom-frequency').value.trim()
             }
         };
         
@@ -572,5 +691,173 @@
     
     // 页面加载时计算一次
     document.addEventListener('DOMContentLoaded', calculateAndDisplayBMI);
-</script>
+
+    // 治疗方案配置相关函数
+    document.addEventListener('DOMContentLoaded', function() {
+        // 胰岛素启用/禁用切换
+        document.getElementById('insulin-enabled').addEventListener('change', function() {
+            const insulinDetails = document.getElementById('insulin-details');
+            if (this.checked) {
+                insulinDetails.style.display = 'block';
+            } else {
+                insulinDetails.style.display = 'none';
+            }
+        });
+
+        // 胰岛素注射频率选择
+        document.getElementById('insulin-frequency').addEventListener('change', function() {
+            const customFrequencyRow = document.querySelector('.custom-frequency-row');
+            if (this.value === 'custom') {
+                customFrequencyRow.style.display = 'block';
+            } else {
+                customFrequencyRow.style.display = 'none';
+            }
+        });
+
+        // 初始化胰岛素频率显示状态
+        const insulinFrequency = document.getElementById('insulin-frequency');
+        const customFrequencyRow = document.querySelector('.custom-frequency-row');
+        if (insulinFrequency.value === 'custom') {
+            customFrequencyRow.style.display = 'block';
+        } else {
+            customFrequencyRow.style.display = 'none';
+        }
+
+        // 药物用法选择事件委托
+        document.getElementById('medications-container').addEventListener('change', function(e) {
+            if (e.target.classList.contains('medication-usage')) {
+                const medicationItem = e.target.closest('.medication-item');
+                const customUsageRow = medicationItem.querySelector('.custom-usage-row');
+                
+                if (e.target.value === 'custom') {
+                    customUsageRow.style.display = 'block';
+                } else {
+                    customUsageRow.style.display = 'none';
+                }
+            }
+        });
+
+        // 加载已保存的药物治疗数据
+        loadMedications();
+    });
+
+    // 添加药物
+    function addMedication() {
+        addMedicationWithData('', '', 'mg', '');
+    }
+
+    // 删除药物
+    function removeMedication(button) {
+        const medicationItem = button.closest('.medication-item');
+        medicationItem.remove();
+    }
+
+    // 清空所有药物
+    function clearMedications() {
+        if (confirm('确定要清空所有药物记录吗？')) {
+            document.getElementById('medications-container').innerHTML = '';
+            // 重新添加一个空的药物项
+            addMedication();
+        }
+    }
+
+    // 加载药物治疗数据
+    function loadMedications() {
+        // 从服务器配置中加载已保存的药物治疗数据
+        const container = document.getElementById('medications-container');
+        container.innerHTML = ''; // 清空容器
+        
+        // 获取已保存的药物治疗数据
+        const savedMedications = {{ config.treatment_plan.medications|tojson|safe }};
+        
+        if (savedMedications && savedMedications.length > 0) {
+            // 加载已保存的药物
+            savedMedications.forEach(med => {
+                addMedicationWithData(med.name, med.dosage, med.unit, med.usage);
+            });
+        } else {
+            // 如果没有保存的数据，添加一个空的药物项
+            addMedication();
+        }
+    }
+
+    // 添加药物并填充数据
+    function addMedicationWithData(name, dosage, unit, usage) {
+        const container = document.getElementById('medications-container');
+        const medicationItem = document.createElement('div');
+        medicationItem.className = 'medication-item mb-3 p-3 border rounded';
+        
+        medicationItem.innerHTML = `
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <input type="text" class="form-control medication-name" 
+                           placeholder="药物名称" value="${name || ''}">
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control medication-dosage" 
+                           placeholder="剂量" value="${dosage || ''}">
+                </div>
+                <div class="col-md-2">
+                    <input type="text" class="form-control medication-unit" 
+                           placeholder="单位" value="${unit || 'mg'}">
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select medication-usage">
+                        <option value="">选择用法</option>
+                        <option value="一日三次" ${usage === '一日三次' ? 'selected' : ''}>一日三次</option>
+                        <option value="早晚一次" ${usage === '早晚一次' ? 'selected' : ''}>早晚一次</option>
+                        <option value="每日一次" ${usage === '每日一次' ? 'selected' : ''}>每日一次</option>
+                        <option value="每日随餐" ${usage === '每日随餐' ? 'selected' : ''}>每日随餐</option>
+                        <option value="custom" ${usage && !['一日三次', '早晚一次', '每日一次', '每日随餐'].includes(usage) ? 'selected' : ''}>自定义</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="button" class="btn btn-danger btn-sm remove-medication" 
+                            onclick="removeMedication(this)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="row mt-2 custom-usage-row" style="${usage && !['一日三次', '早晚一次', '每日一次', '每日随餐'].includes(usage) ? 'display: block;' : 'display: none;'}">
+                <div class="col-md-12">
+                    <input type="text" class="form-control medication-custom-usage" 
+                           placeholder="请输入自定义用法" value="${usage && !['一日三次', '早晚一次', '每日一次', '每日随餐'].includes(usage) ? usage : ''}">
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(medicationItem);
+    }
+
+    // 获取药物治疗数据
+    function getMedicationsData() {
+        const medications = [];
+        const medicationItems = document.querySelectorAll('.medication-item');
+        
+        medicationItems.forEach(item => {
+            const name = item.querySelector('.medication-name').value.trim();
+            const dosage = item.querySelector('.medication-dosage').value.trim();
+            const unit = item.querySelector('.medication-unit').value.trim();
+            const usageSelect = item.querySelector('.medication-usage');
+            const customUsage = item.querySelector('.medication-custom-usage').value.trim();
+            
+            if (name && dosage) {
+                let usage = usageSelect.value;
+                if (usage === 'custom' && customUsage) {
+                    usage = customUsage;
+                }
+                
+                medications.push({
+                    name: name,
+                    dosage: dosage,
+                    unit: unit,
+                    usage: usage || ''
+                });
+            }
+        });
+        
+        return medications;
+    }
+
+    </script>
 {% endblock %}
