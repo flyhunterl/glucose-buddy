@@ -578,6 +578,23 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
+                <!-- 打印模式选择 -->
+                <div class="mb-3">
+                    <label class="form-label"><strong>打印模式</strong></label>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="printMode" id="printModeBlackWhite" value="blackwhite" checked>
+                        <label class="form-check-label" for="printModeBlackWhite">
+                            <i class="fas fa-adjust"></i> 黑白打印（推荐）
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="printMode" id="printModeColor" value="color">
+                        <label class="form-check-label" for="printModeColor">
+                            <i class="fas fa-palette"></i> 彩色打印
+                        </label>
+                    </div>
+                </div>
+                <hr>
                 <div class="form-check mb-2">
                     <input class="form-check-input" type="checkbox" id="printAll" checked>
                     <label class="form-check-label" for="printAll">
@@ -626,6 +643,85 @@
 
 <!-- 打印样式 -->
 <style>
+/* 黑白打印样式 - 适当的对比度，保持界面整洁 */
+@media print {
+    body.print-blackwhite {
+        /* 强制所有文字为黑色，适中的粗细 */
+        * {
+            color: #000000 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        
+        /* 强制背景为纯白色，去除干扰 */
+        * {
+            background-color: #ffffff !important;
+            background: #ffffff !important;
+            background-image: none !important;
+            box-shadow: none !important;
+        }
+        
+        /* 强制边框为黑色，适中的粗细 */
+        * {
+            border-color: #000000 !important;
+        }
+        
+        /* 特殊处理卡片 - 保持原有布局 */
+        .card {
+            border: 1px solid #000000 !important;
+            box-shadow: none !important;
+            break-inside: avoid;
+        }
+        
+        .card-header {
+            background-color: #f8f9fa !important;
+            border-bottom: 1px solid #000000 !important;
+        }
+        
+        .card-header * {
+            font-weight: 600 !important;
+        }
+        
+        /* 治疗方案项目 - 保持原有布局但去除彩色背景 */
+        .print-treatment .medication-item {
+            background-color: #f8f9fa !important;
+            border: 1px solid #000000 !important;
+        }
+        
+        .print-treatment .insulin-item {
+            background-color: #f8f9fa !important;
+            border: 1px solid #000000 !important;
+        }
+        
+        /* 表格样式 - 保持清晰但不过粗 */
+        .table, .table th, .table td {
+            border: 1px solid #000000 !important;
+        }
+        
+        .table th {
+            font-weight: 600 !important;
+        }
+        
+        /* 确保页脚清晰 */
+        .print-footer {
+            border-top: 1px solid #000000 !important;
+        }
+        
+        /* 隐藏不需要的元素 */
+        .btn, .navbar, footer, .modal, .modal-backdrop {
+            display: none !important;
+        }
+    }
+}
+
+/* 彩色打印样式 - 保持原有颜色 */
+@media print {
+    body.print-color {
+        /* 保持原有的彩色样式 */
+    }
+}
+
+/* 通用打印样式 - 只在彩色模式下应用背景色 */
 @media print {
     .print-section {
         display: block !important;
@@ -641,16 +737,20 @@
 
     body {
         font-size: 10pt;
+    }
+    
+    /* 彩色模式下的样式 */
+    body.print-color {
         background-color: #fff;
     }
     
-    .card {
+    body.print-color .card {
         border: 1px solid #dee2e6 !important;
         box-shadow: none !important;
         break-inside: avoid;
     }
     
-    .card-header {
+    body.print-color .card-header {
         background-color: #f8f9fa !important;
         border-bottom: 1px solid #dee2e6 !important;
     }
@@ -671,10 +771,17 @@
         border-collapse: collapse;
     }
     
+    /* 表格样式 - 统一处理 */
     .table th,
     .table td {
         padding: 0.4rem;
         border: 1px solid #dee2e6;
+    }
+    
+    /* 黑白模式下覆盖表格边框颜色 */
+    body.print-blackwhite .table th,
+    body.print-blackwhite .table td {
+        border-color: #000000 !important;
     }
     
     .table-responsive {
@@ -729,6 +836,7 @@
         line-height: 1.2 !important;
     }
     
+    /* 药物样式 - 统一处理 */
     .print-treatment .medication-item {
         display: inline-block !important;
         font-size: 9pt !important;
@@ -739,20 +847,22 @@
         margin: 0 !important;
     }
     
+    /* 黑白模式下覆盖药物边框颜色 */
+    body.print-blackwhite .print-treatment .medication-item {
+        border-color: #000000 !important;
+    }
+    
     .print-treatment .medication-item strong {
-        color: #000 !important;
         font-weight: 600 !important;
         margin-right: 0.3rem !important;
     }
     
     .print-treatment .med-dosage {
-        color: #495057 !important;
         font-weight: normal !important;
         margin-right: 0.3rem !important;
     }
     
     .print-treatment .med-usage {
-        color: #6c757d !important;
         font-size: 8pt !important;
         font-weight: normal !important;
     }
@@ -765,6 +875,7 @@
         align-items: center !important;
     }
     
+    /* 胰岛素样式 - 统一处理 */
     .print-treatment .insulin-item {
         display: inline-flex !important;
         align-items: center !important;
@@ -775,14 +886,18 @@
         border-radius: 3px !important;
     }
     
+    /* 黑白模式下覆盖胰岛素边框和背景色 */
+    body.print-blackwhite .print-treatment .insulin-item {
+        border-color: #000000 !important;
+        background-color: #f8f9fa !important;
+    }
+    
     .print-treatment .insulin-label {
-        color: #004085 !important;
         font-weight: 600 !important;
         margin-right: 0.3rem !important;
     }
     
     .print-treatment .insulin-value {
-        color: #004085 !important;
         font-weight: normal !important;
     }
     
@@ -790,9 +905,13 @@
     .print-treatment h6 {
         font-size: 11pt !important;
         margin-bottom: 0.8rem !important;
-        color: #000 !important;
         border-bottom: 1px solid #dee2e6 !important;
         padding-bottom: 0.3rem !important;
+    }
+    
+    /* 黑白模式下覆盖标题边框颜色 */
+    body.print-blackwhite .print-treatment h6 {
+        border-color: #000000 !important;
     }
     
     /* 减少整体间距 */
@@ -804,6 +923,7 @@
         margin-bottom: 0.8rem !important;
     }
     
+    /* 页脚样式 */
     .print-footer {
         display: block !important;
         position: fixed;
@@ -812,9 +932,13 @@
         right: 0;
         text-align: center;
         font-size: 8pt;
-        color: #6c757d;
         border-top: 1px solid #dee2e6;
         padding-top: 5px;
+    }
+    
+    /* 黑白模式下覆盖页脚边框颜色 */
+    body.print-blackwhite .print-footer {
+        border-color: #000000 !important;
     }
 }
 
@@ -1182,6 +1306,10 @@ function printSelectedSections() {
     const printAllCheckbox = document.getElementById('printAll');
     const sectionCheckboxes = document.querySelectorAll('.print-section-checkbox');
     
+    // 获取选择的打印模式
+    const selectedMode = document.querySelector('input[name="printMode"]:checked').value;
+    const body = document.body;
+    
     // 先隐藏所有打印区域
     const allSections = document.querySelectorAll('.print-section');
     allSections.forEach(s => {
@@ -1214,6 +1342,15 @@ function printSelectedSections() {
         }
     }
     
+    // 根据选择的模式添加对应的CSS类
+    if (selectedMode === 'blackwhite') {
+        body.classList.add('print-blackwhite');
+        body.classList.remove('print-color');
+    } else {
+        body.classList.add('print-color');
+        body.classList.remove('print-blackwhite');
+    }
+    
     // 关闭模态框
     const modal = bootstrap.Modal.getInstance(document.getElementById('printOptionsModal'));
     modal.hide();
@@ -1221,11 +1358,12 @@ function printSelectedSections() {
     // 执行打印
     window.print();
     
-    // 打印完成后恢复所有区域的显示
+    // 打印完成后恢复所有区域的显示和移除打印模式类
     setTimeout(() => {
         allSections.forEach(s => {
             s.classList.remove('print-hidden');
         });
+        body.classList.remove('print-blackwhite', 'print-color');
     }, 1000);
 }
 </script>
