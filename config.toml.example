@@ -36,3 +36,10 @@ to_emails = ["recipient@example.com"]
 [auth]
 enable = false
 password = "your-secure-password"
+
+[database]
+# 数据库文件路径配置
+# 支持绝对路径或相对路径
+# 开发环境使用: data/nightscout_data.db
+# Docker环境建议使用: /app/data/nightscout_data.db
+path = "data/nightscout_data.db"

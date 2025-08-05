@@ -15,29 +15,29 @@
             <div class="card-body">
                 <div class="row align-items-center">
                     <div class="col-12 col-xl-7 mb-3 mb-xl-0">
-                        <div class="btn-group w-100" role="group">
-                            <button type="button" class="btn btn-primary active btn-sm" onclick="loadData(1)">今日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(3)">3日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(7)">7日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(15)">15日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(30)">30日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(60)">60日</button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="loadData(90)">90日</button>
-                            <button type="button" class="btn btn-outline-info btn-sm" data-bs-toggle="collapse" data-bs-target="#customDateCollapse">自定义</button>
+                        <div class="btn-group flex-wrap" role="group" style="gap: 2px;">
+                            <button type="button" class="btn btn-primary active btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(1)">今日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(3)">3日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(7)">7日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(15)">15日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(30)">30日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(60)">60日</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="loadData(90)">90日</button>
+                            <button type="button" class="btn btn-outline-info btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" data-bs-toggle="collapse" data-bs-target="#customDateCollapse">自定义</button>
                         </div>
                     </div>
                     <div class="col-12 col-xl-5">
-                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                            <button class="btn btn-primary btn-sm" onclick="generateReport()">
+                        <div class="d-grid gap-1 d-md-flex justify-content-md-end flex-wrap" style="gap: 2px;">
+                            <button class="btn btn-primary btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="generateReport()">
                                 <i class="fas fa-file-alt"></i> <span class="d-none d-sm-inline">生成报表</span>
                             </button>
-                            <button class="btn btn-success btn-sm" onclick="getAnalysis()">
+                            <button class="btn btn-success btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="getAnalysis()">
                                 <i class="fas fa-brain"></i> <span class="d-none d-sm-inline">AI分析</span>
                             </button>
-                            <button class="btn btn-warning btn-sm" onclick="openAIConsult()">
+                            <button class="btn btn-warning btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="openAIConsult()">
                                 <i class="fas fa-comments"></i> <span class="d-none d-sm-inline">AI咨询</span>
                             </button>
-                            <button class="btn btn-info btn-sm" onclick="openMessageInbox()">
+                            <button class="btn btn-info btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="openMessageInbox()">
                                 <i class="fas fa-envelope"></i> <span class="d-none d-sm-inline">消息记录</span>
                             </button>
                         </div>
@@ -71,7 +71,19 @@
     <!-- 统计卡片 -->
     <div class="col-12 mb-4">
         <div class="row" id="stats-cards">
-            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
+                <div class="card text-center h-100">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-info mb-2"><i class="fas fa-clock"></i> 当前血糖</h6>
+                        <h4 id="current-glucose-value" class="mb-1">--</h4>
+                        <small id="current-glucose-unit" class="text-muted">mmol/L</small>
+                        <div id="current-glucose-direction" class="mt-1">
+                            <small class="text-muted">--</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-primary mb-2">平均血糖</h6>
@@ -80,7 +92,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-success mb-2">目标范围内</h6>
@@ -89,7 +101,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-warning mb-2">最高血糖</h6>
@@ -98,7 +110,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-xl-2 col-lg-3 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-danger mb-2">最低血糖</h6>
@@ -107,7 +119,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-xl-2 col-lg-6 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-info mb-2">糖化血红蛋白</h6>
@@ -119,7 +131,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-xl-2 col-lg-6 mb-3">
+            <div class="col-6 col-lg-3 mb-3">
                 <div class="card text-center h-100">
                     <div class="card-body py-3">
                         <h6 class="card-title text-purple mb-2">血糖变异系数</h6>
@@ -130,6 +142,38 @@
                         </div>
                     </div>
                 </div>
+            </div>
+            <div class="col-6 col-lg-3 mb-3">
+                <div class="card text-center h-100" id="prediction-card">
+                    <div class="card-body py-3">
+                        <h6 class="card-title text-info mb-2">
+                            <i class="fas fa-chart-line"></i> 30分钟预测
+                        </h6>
+                        <h4 id="predicted-glucose" class="mb-1">--</h4>
+                        <small class="text-muted">mmol/L</small>
+                        <div id="prediction-confidence" class="mt-1">
+                            <small class="badge bg-secondary">--</small>
+                        </div>
+                        <div id="risk-indicator" class="mt-1">
+                            <small class="badge bg-success">低风险</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 警报通知 -->
+    <div class="col-12 mb-4" id="alert-section" style="display: none;">
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <div class="d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <div>
+                    <h6 class="alert-heading mb-1" id="alert-title">低血糖警报</h6>
+                    <p class="mb-1" id="alert-message">预测30分钟后可能发生低血糖</p>
+                    <small id="alert-time" class="text-muted"></small>
+                </div>
+                <button type="button" class="btn-close ms-auto" onclick="dismissAlert()"></button>
             </div>
         </div>
     </div>
@@ -560,6 +604,22 @@
                 console.error('加载指尖血糖数据失败:', error);
                 showNotification('加载指尖血糖数据失败', 'danger');
             });
+
+        // 加载当前血糖数据
+        fetch(`/api/current-glucose`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    console.error('加载当前血糖数据失败:', data.error);
+                    updateCurrentGlucose({}); // 清空卡片
+                } else {
+                    updateCurrentGlucose(data);
+                }
+            })
+            .catch(error => {
+                console.error('加载当前血糖数据失败:', error);
+                updateCurrentGlucose({}); // 清空卡片
+            });
     }
     
     // 更新血糖表格
@@ -835,6 +895,25 @@
         } else {
             document.getElementById('cv-value').textContent = '--';
             document.getElementById('cv-status').innerHTML = '<small class="badge bg-secondary">--</small>';
+        }
+    }
+
+    // 更新当前血糖卡片
+    function updateCurrentGlucose(data) {
+        const valueEl = document.getElementById('current-glucose-value');
+        const unitEl = document.getElementById('current-glucose-unit');
+        const directionEl = document.getElementById('current-glucose-direction');
+
+        if (data && data.value_mmol) {
+            valueEl.textContent = data.value_mmol;
+            valueEl.className = `mb-1 ${getGlucoseColor(data.value_mmol)}`;
+            unitEl.textContent = 'mmol/L';
+            directionEl.innerHTML = `<small class="text-muted">${formatDirection(data.direction)} (${data.time.split(' ')[1]})</small>`;
+        } else {
+            valueEl.textContent = '--';
+            valueEl.className = 'mb-1';
+            unitEl.textContent = 'mmol/L';
+            directionEl.innerHTML = '<small class="text-muted">--</small>';
         }
     }
     
@@ -1521,5 +1600,207 @@
                 console.error('获取未读消息数量失败:', error);
             });
     }
+    
+    // 更新预测显示
+    function updatePredictionDisplay(prediction, risk_assessment) {
+        const predictedGlucoseEl = document.getElementById('predicted-glucose');
+        const confidenceEl = document.getElementById('prediction-confidence');
+        const riskIndicatorEl = document.getElementById('risk-indicator');
+        
+        // 更新预测血糖值
+        predictedGlucoseEl.textContent = prediction.predicted_glucose_mmol;
+        
+        // 更新置信度
+        const confidenceBadge = confidenceEl.querySelector('.badge');
+        confidenceBadge.textContent = `置信度 ${prediction.confidence_score}%`;
+        
+        // 更新置信度颜色
+        if (prediction.confidence_score >= 80) {
+            confidenceBadge.className = 'badge bg-success';
+        } else if (prediction.confidence_score >= 60) {
+            confidenceBadge.className = 'badge bg-warning';
+        } else {
+            confidenceBadge.className = 'badge bg-danger';
+        }
+        
+        // 更新风险指示器
+        const riskBadge = riskIndicatorEl.querySelector('.badge');
+        riskBadge.textContent = getRiskText(risk_assessment.risk_level);
+        
+        // 更新风险指示器颜色
+        if (risk_assessment.risk_level === 'HIGH') {
+            riskBadge.className = 'badge bg-danger';
+        } else if (risk_assessment.risk_level === 'MEDIUM') {
+            riskBadge.className = 'badge bg-warning';
+        } else {
+            riskBadge.className = 'badge bg-success';
+        }
+        
+        // 如果有图表数据，更新图表显示预测
+        if (glucoseChart) {
+            updateChartWithPrediction(prediction);
+        }
+    }
+    
+    // 获取风险描述文本
+    function getRiskText(risk_level) {
+        switch (risk_level) {
+            case 'HIGH':
+                return '高风险';
+            case 'MEDIUM':
+                return '中等风险';
+            case 'LOW':
+                return '低风险';
+            default:
+                return '未知风险';
+        }
+    }
+    
+    // 显示警报
+    function showAlert(risk_assessment) {
+        const alertSection = document.getElementById('alert-section');
+        const alertTitle = document.getElementById('alert-title');
+        const alertMessage = document.getElementById('alert-message');
+        const alertTime = document.getElementById('alert-time');
+        
+        // 设置警报内容
+        alertTitle.textContent = `${getRiskText(risk_assessment.risk_level)} - 低血糖警报`;
+        alertMessage.textContent = risk_assessment.risk_description;
+        alertTime.textContent = `预测血糖: ${risk_assessment.predicted_glucose_mmol} mmol/L (${risk_assessment.predicted_glucose_mgdl} mg/dL)`;
+        
+        // 设置警报样式
+        const alertEl = alertSection.querySelector('.alert');
+        if (risk_assessment.risk_level === 'HIGH') {
+            alertEl.className = 'alert alert-danger alert-dismissible fade show';
+        } else if (risk_assessment.risk_level === 'MEDIUM') {
+            alertEl.className = 'alert alert-warning alert-dismissible fade show';
+        }
+        
+        // 显示警报
+        alertSection.style.display = 'block';
+        
+        // 添加动画效果
+        alertEl.classList.add('animate__animated', 'animate__fadeInDown');
+    }
+    
+    // 关闭警报
+    function dismissAlert() {
+        const alertSection = document.getElementById('alert-section');
+        alertSection.style.display = 'none';
+        
+        // 这里可以添加确认警报的API调用
+        // acknowledgeAlert();
+    }
+    
+    // 更新图表显示预测
+    function updateChartWithPrediction(prediction) {
+        if (!glucoseChart) return;
+        
+        // 获取当前图表数据
+        const currentData = glucoseChart.data;
+        
+        // 计算预测点的时间
+        const lastTime = currentData.labels[currentData.labels.length - 1];
+        const predictionTime = new Date(lastTime + 'Z');
+        predictionTime.setMinutes(predictionTime.getMinutes() + 30);
+        
+        // 添加预测数据点
+        currentData.labels.push(predictionTime.toISOString());
+        
+        // 添加预测数据集（如果不存在）
+        let predictionDataset = currentData.datasets.find(dataset => dataset.label === '预测血糖');
+        if (!predictionDataset) {
+            predictionDataset = {
+                label: '预测血糖',
+                data: new Array(currentData.labels.length - 1).fill(null),
+                borderColor: 'rgb(255, 99, 132)',
+                backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                borderDash: [5, 5],
+                fill: false,
+                tension: 0.1
+            };
+            currentData.datasets.push(predictionDataset);
+        }
+        
+        // 添加预测值
+        predictionDataset.data.push(prediction.predicted_glucose_mmol);
+        
+        // 更新图表
+        glucoseChart.update();
+        
+        // 30秒后移除预测点
+        setTimeout(() => {
+            if (glucoseChart) {
+                currentData.labels.pop();
+                predictionDataset.data.pop();
+                glucoseChart.update();
+            }
+        }, 30000);
+    }
+    
+    // 显示通知消息
+    function showNotification(message, type = 'info') {
+        // 创建通知元素
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+        notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 350px;';
+        
+        notification.innerHTML = `
+            <div class="d-flex align-items-center">
+                <i class="fas fa-${type === 'error' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
+                <div>
+                    <p class="mb-0">${message}</p>
+                </div>
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // 自动关闭
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 5000);
+    }
+    
+    // 自动血糖预测 - 页面加载时自动执行
+    function loadAutomaticPrediction() {
+        fetch('/api/predict')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // 更新预测显示
+                    updatePredictionDisplay(data.prediction, data.risk_assessment);
+                    
+                    // 如果有高风险或中风险，显示警报
+                    if (data.risk_assessment.risk_level !== 'LOW') {
+                        showAlert(data.risk_assessment);
+                    }
+                } else {
+                    // 数据不足时显示友好的提示
+                    if (data.error.includes('数据不足') || data.error.includes('数据点不足')) {
+                        const predictionCard = document.getElementById('prediction-card');
+                        if (predictionCard) {
+                            const confidenceEl = document.getElementById('prediction-confidence');
+                            if (confidenceEl) {
+                                confidenceEl.innerHTML = '<span class="text-muted">数据不足，无法预测</span>';
+                            }
+                        }
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('自动预测失败:', error);
+                // 静默失败，不显示错误信息给用户
+            });
+    }
+    
+    // 页面加载完成后自动执行预测
+    document.addEventListener('DOMContentLoaded', function() {
+        // 延迟1秒执行预测，确保页面完全加载
+        setTimeout(loadAutomaticPrediction, 1000);
+    });
 </script>
 {% endblock %}

@@ -86,6 +86,9 @@ class NightscoutWebMonitor:
                 "insulin_dosage": 0,
                 "insulin_frequency": "",
                 "insulin_custom_frequency": ""
+            },
+            "database": {
+                "path": "data/nightscout_data.db"
             }
         }
         
@@ -117,6 +120,28 @@ class NightscoutWebMonitor:
             logger.error(f"加载配置文件失败: {e}")
             return default_config.copy()
 
+    def get_database_path(self):
+        """获取数据库文件路径，支持环境变量和配置文件"""
+        # 1. 优先检查环境变量
+        env_db_path = os.environ.get('NIGHTSCOUT_DB_PATH')
+        if env_db_path:
+            logger.info(f"使用环境变量中的数据库路径: {env_db_path}")
+            return env_db_path
+        
+        # 2. 使用配置文件中的路径
+        db_path = self.config.get("database", {}).get("path", "data/nightscout_data.db")
+        
+        # 3. 检查是否是Docker环境，如果是则使用Docker专用路径
+        if os.path.exists("/.dockerenv"):
+            docker_db_path = "/app/data/nightscout_data.db"
+            # 如果在Docker环境中且配置路径不存在，尝试使用Docker路径
+            if not os.path.exists(db_path) and os.path.exists(os.path.dirname(docker_db_path)):
+                logger.info(f"Docker环境检测到，使用Docker数据库路径: {docker_db_path}")
+                return docker_db_path
+        
+        logger.info(f"使用配置文件中的数据库路径: {db_path}")
+        return db_path
+
     def save_config(self, config):
         """保存配置文件"""
         try:
@@ -134,7 +159,7 @@ class NightscoutWebMonitor:
     def init_database(self):
         """初始化数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             # 创建血糖数据表
@@ -218,6 +243,55 @@ class NightscoutWebMonitor:
                     is_favorite BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+            
+            # 创建预测结果表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prediction_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prediction_time TIMESTAMP NOT NULL,
+                    predicted_glucose_mgdl REAL NOT NULL,
+                    predicted_glucose_mmol REAL NOT NULL,
+                    confidence_score REAL NOT NULL,
+                    algorithm_used TEXT NOT NULL,
+                    data_points_count INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 创建低血糖警报表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS hypoglycemia_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alert_time TIMESTAMP NOT NULL,
+                    predicted_glucose_mgdl REAL NOT NULL,
+                    predicted_glucose_mmol REAL NOT NULL,
+                    risk_level TEXT NOT NULL CHECK (risk_level IN ('HIGH', 'MEDIUM', 'LOW')),
+                    alert_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (alert_status IN ('ACTIVE', 'ACKNOWLEDGED', 'DISMISSED')),
+                    acknowledged_at TIMESTAMP,
+                    notification_sent BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 创建用户警报配置表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_alert_config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    high_risk_threshold_mgdl REAL DEFAULT 70,
+                    medium_risk_threshold_mgdl REAL DEFAULT 80,
+                    enable_predictions BOOLEAN DEFAULT 1,
+                    enable_alerts BOOLEAN DEFAULT 1,
+                    notification_methods TEXT DEFAULT 'web',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 插入默认警报配置（如果不存在）
+            cursor.execute("""
+                INSERT OR IGNORE INTO user_alert_config (id, high_risk_threshold_mgdl, medium_risk_threshold_mgdl, enable_predictions, enable_alerts, notification_methods)
+                VALUES (1, 70, 80, 1, 1, 'web')
             """)
             
             conn.commit()
@@ -453,7 +527,7 @@ class NightscoutWebMonitor:
     async def save_glucose_data(self, glucose_data: List[Dict]):
         """保存血糖数据到数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             saved_count = 0
@@ -490,7 +564,7 @@ class NightscoutWebMonitor:
     async def save_treatment_data(self, treatment_data: List[Dict]):
         """保存治疗数据到数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             saved_count = 0
@@ -546,7 +620,7 @@ class NightscoutWebMonitor:
     async def save_activity_data(self, activity_data: List[Dict]):
         """保存运动数据到数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             saved_count = 0
@@ -583,7 +657,7 @@ class NightscoutWebMonitor:
     async def save_meter_data(self, meter_data: List[Dict]):
         """保存指尖血糖数据到数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             saved_count = 0
@@ -618,7 +692,7 @@ class NightscoutWebMonitor:
     def get_glucose_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取血糖数据"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             if start_date and end_date:
@@ -665,7 +739,7 @@ class NightscoutWebMonitor:
     def get_treatment_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取治疗数据"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             if start_date and end_date:
@@ -716,7 +790,7 @@ class NightscoutWebMonitor:
     def get_activity_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取运动数据"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             if start_date and end_date:
@@ -762,7 +836,7 @@ class NightscoutWebMonitor:
     def get_meter_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """从数据库获取指尖血糖数据"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
 
             if start_date and end_date:
@@ -806,7 +880,7 @@ class NightscoutWebMonitor:
     def save_message(self, message_type: str, title: str, content: str) -> bool:
         """保存消息到数据库"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -824,7 +898,7 @@ class NightscoutWebMonitor:
     def get_messages(self, message_type: Optional[str] = None, limit: int = 50) -> List[Dict]:
         """从数据库获取消息"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             if message_type:
@@ -866,7 +940,7 @@ class NightscoutWebMonitor:
     def update_message_status(self, message_id: int, is_read: Optional[bool] = None, is_favorite: Optional[bool] = None) -> bool:
         """更新消息状态"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             if is_read is not None and is_favorite is not None:
@@ -900,7 +974,7 @@ class NightscoutWebMonitor:
     def delete_message(self, message_id: int) -> bool:
         """删除消息"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -918,7 +992,7 @@ class NightscoutWebMonitor:
     def get_unread_message_count(self) -> int:
         """获取未读消息数量"""
         try:
-            conn = sqlite3.connect("nightscout_data.db")
+            conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -2182,6 +2256,365 @@ class NightscoutWebMonitor:
                 'error': str(e)
             }
 
+    def predict_glucose(self, glucose_data: List[Dict]) -> Dict:
+        """预测血糖值 - 加权移动平均 + 趋势外推算法"""
+        try:
+            # 数据验证
+            if len(glucose_data) < 20:
+                raise ValueError("数据点不足，至少需要20个数据点")
+            
+            # 验证数据时间范围（3-7天）
+            if glucose_data:
+                sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
+                if sorted_data:
+                    earliest_time = sorted_data[0].get('shanghai_time', '')
+                    latest_time = sorted_data[-1].get('shanghai_time', '')
+                    
+                    if earliest_time and latest_time:
+                        try:
+                            from datetime import datetime
+                            earliest_dt = datetime.strptime(earliest_time, '%Y-%m-%d %H:%M:%S')
+                            latest_dt = datetime.strptime(latest_time, '%Y-%m-%d %H:%M:%S')
+                            time_diff = latest_dt - earliest_dt
+                            days_diff = time_diff.total_seconds() / (24 * 3600)
+                            
+                            if days_diff < 3:
+                                raise ValueError(f"数据时间范围不足，至少需要3天数据（当前：{days_diff:.1f}天）")
+                            if days_diff > 7:
+                                raise ValueError(f"数据时间范围过长，最多支持7天数据（当前：{days_diff:.1f}天）")
+                        except ValueError as ve:
+                            if "time data" in str(ve):
+                                logger.warning(f"时间格式解析失败，跳过时间范围验证: {ve}")
+                            else:
+                                raise ve
+            
+            # 按时间排序（从旧到新）
+            sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
+            
+            # 获取最近的血糖值
+            recent_glucose_values = []
+            for entry in sorted_data[-20:]:  # 使用最近20个数据点
+                sgv = entry.get('sgv', 0)
+                if sgv > 0:
+                    recent_glucose_values.append(sgv)
+            
+            if len(recent_glucose_values) < 10:
+                raise ValueError("有效的血糖数据点不足")
+            
+            # 加权移动平均计算
+            weights = [i * 0.1 for i in range(1, len(recent_glucose_values) + 1)]
+            weighted_sum = sum(recent_glucose_values[i] * weights[i] for i in range(len(recent_glucose_values)))
+            weight_sum = sum(weights)
+            weighted_avg = weighted_sum / weight_sum
+            
+            # 趋势计算（使用最近5个数据点）
+            trend_values = recent_glucose_values[-5:]
+            if len(trend_values) >= 2:
+                # 计算变化率
+                changes = []
+                for i in range(1, len(trend_values)):
+                    change = trend_values[i] - trend_values[i-1]
+                    changes.append(change)
+                
+                avg_change = sum(changes) / len(changes)
+                
+                # 趋势外推30分钟
+                # 假设数据点间隔约5分钟，30分钟相当于6个间隔
+                projected_change = avg_change * 6
+                predicted_glucose_mgdl = weighted_avg + projected_change
+            else:
+                # 如果没有足够数据计算趋势，只使用加权平均
+                predicted_glucose_mgdl = weighted_avg
+                avg_change = 0
+            
+            # 计算置信度（基于数据点数量和趋势一致性）
+            data_points_factor = min(len(recent_glucose_values) / 20, 1.0)
+            
+            # 趋势一致性因子（变化的标准差）
+            if len(changes) > 1:
+                variance = sum((x - avg_change) ** 2 for x in changes) / len(changes)
+                std_dev = variance ** 0.5
+                trend_consistency = max(0, 1 - (std_dev / abs(avg_change)) if avg_change != 0 else 1)
+            else:
+                trend_consistency = 0.5
+            
+            confidence_score = round((data_points_factor * 0.6 + trend_consistency * 0.4) * 100, 1)
+            
+            # 单位转换
+            predicted_glucose_mmol = round(predicted_glucose_mgdl / 18.0, 1)
+            
+            return {
+                'predicted_glucose_mgdl': round(predicted_glucose_mgdl, 1),
+                'predicted_glucose_mmol': predicted_glucose_mmol,
+                'confidence_score': confidence_score,
+                'trend_rate': round(avg_change, 2),
+                'algorithm_used': 'weighted_moving_average_trend_extrapolation',
+                'data_points_count': len(recent_glucose_values),
+                'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+        except Exception as e:
+            logger.error(f"血糖预测失败: {e}")
+            raise e
+
+    def save_prediction_result(self, prediction_data: Dict) -> bool:
+        """保存预测结果到数据库"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO prediction_results 
+                (prediction_time, predicted_glucose_mgdl, predicted_glucose_mmol, 
+                 confidence_score, algorithm_used, data_points_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                prediction_data['prediction_time'],
+                prediction_data['predicted_glucose_mgdl'],
+                prediction_data['predicted_glucose_mmol'],
+                prediction_data['confidence_score'],
+                prediction_data['algorithm_used'],
+                prediction_data['data_points_count']
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"保存预测结果失败: {e}")
+            return False
+
+    def assess_hypoglycemia_risk(self, predicted_glucose_mgdl: float) -> Dict:
+        """评估低血糖风险"""
+        try:
+            # 获取用户配置
+            config = self.get_user_alert_config()
+            high_threshold = config.get('high_risk_threshold_mgdl', 70)
+            medium_threshold = config.get('medium_risk_threshold_mgdl', 80)
+            
+            predicted_glucose_mmol = round(predicted_glucose_mgdl / 18.0, 1)
+            
+            # 风险评估逻辑
+            if predicted_glucose_mgdl < high_threshold:
+                risk_level = 'HIGH'
+                risk_description = '高风险：可能在30分钟内发生低血糖'
+            elif predicted_glucose_mgdl < medium_threshold:
+                risk_level = 'MEDIUM'
+                risk_description = '中等风险：血糖可能偏低'
+            else:
+                risk_level = 'LOW'
+                risk_description = '低风险：血糖水平正常'
+            
+            # 计算风险严重程度（0-100）
+            if risk_level == 'HIGH':
+                risk_severity = max(0, min(100, (high_threshold - predicted_glucose_mgdl) / high_threshold * 100))
+            elif risk_level == 'MEDIUM':
+                risk_severity = max(0, min(100, (medium_threshold - predicted_glucose_mgdl) / (medium_threshold - high_threshold) * 50))
+            else:
+                risk_severity = 0
+            
+            return {
+                'risk_level': risk_level,
+                'risk_description': risk_description,
+                'risk_severity': round(risk_severity, 1),
+                'predicted_glucose_mgdl': predicted_glucose_mgdl,
+                'predicted_glucose_mmol': predicted_glucose_mmol,
+                'thresholds': {
+                    'high_risk_mgdl': high_threshold,
+                    'medium_risk_mgdl': medium_threshold,
+                    'high_risk_mmol': round(high_threshold / 18.0, 1),
+                    'medium_risk_mmol': round(medium_threshold / 18.0, 1)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"低血糖风险评估失败: {e}")
+            raise e
+
+    def create_hypoglycemia_alert(self, risk_assessment: Dict) -> bool:
+        """创建低血糖警报"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            # 检查是否已有活跃的相同风险级别的警报
+            cursor.execute("""
+                SELECT id FROM hypoglycemia_alerts 
+                WHERE risk_level = ? AND alert_status = 'ACTIVE'
+                ORDER BY created_at DESC LIMIT 1
+            """, (risk_assessment['risk_level'],))
+            
+            existing_alert = cursor.fetchone()
+            if existing_alert:
+                logger.info(f"已存在活跃的{risk_assessment['risk_level']}风险警报，跳过创建")
+                conn.close()
+                return False
+            
+            # 创建新警报
+            cursor.execute("""
+                INSERT INTO hypoglycemia_alerts 
+                (alert_time, predicted_glucose_mgdl, predicted_glucose_mmol, 
+                 risk_level, alert_status, notification_sent)
+                VALUES (?, ?, ?, ?, 'ACTIVE', 0)
+            """, (
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                risk_assessment['predicted_glucose_mgdl'],
+                risk_assessment['predicted_glucose_mmol'],
+                risk_assessment['risk_level']
+            ))
+            
+            alert_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"创建低血糖警报 ID: {alert_id}, 风险级别: {risk_assessment['risk_level']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"创建低血糖警报失败: {e}")
+            return False
+
+    def get_user_alert_config(self) -> Dict:
+        """获取用户警报配置"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT high_risk_threshold_mgdl, medium_risk_threshold_mgdl, 
+                       enable_predictions, enable_alerts, notification_methods
+                FROM user_alert_config 
+                WHERE id = 1
+            """)
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                return {
+                    'high_risk_threshold_mgdl': result[0],
+                    'medium_risk_threshold_mgdl': result[1],
+                    'enable_predictions': bool(result[2]),
+                    'enable_alerts': bool(result[3]),
+                    'notification_methods': result[4]
+                }
+            else:
+                # 返回默认配置
+                return {
+                    'high_risk_threshold_mgdl': 70,
+                    'medium_risk_threshold_mgdl': 80,
+                    'enable_predictions': True,
+                    'enable_alerts': True,
+                    'notification_methods': 'web'
+                }
+                
+        except Exception as e:
+            logger.error(f"获取用户警报配置失败: {e}")
+            return {
+                'high_risk_threshold_mgdl': 70,
+                'medium_risk_threshold_mgdl': 80,
+                'enable_predictions': True,
+                'enable_alerts': True,
+                'notification_methods': 'web'
+            }
+
+    def update_user_alert_config(self, config: Dict) -> bool:
+        """更新用户警报配置"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE user_alert_config 
+                SET high_risk_threshold_mgdl = ?, 
+                    medium_risk_threshold_mgdl = ?,
+                    enable_predictions = ?,
+                    enable_alerts = ?,
+                    notification_methods = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = 1
+            """, (
+                config.get('high_risk_threshold_mgdl', 70),
+                config.get('medium_risk_threshold_mgdl', 80),
+                1 if config.get('enable_predictions', True) else 0,
+                1 if config.get('enable_alerts', True) else 0,
+                config.get('notification_methods', 'web')
+            ))
+            
+            conn.commit()
+            conn.close()
+            logger.info("用户警报配置已更新")
+            return True
+            
+        except Exception as e:
+            logger.error(f"更新用户警报配置失败: {e}")
+            return False
+
+    def get_alert_history(self, limit: int = 50) -> List[Dict]:
+        """获取警报历史"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id, alert_time, predicted_glucose_mgdl, predicted_glucose_mmol, 
+                       risk_level, alert_status, acknowledged_at, notification_sent
+                FROM hypoglycemia_alerts 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            """, (limit,))
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            alerts = []
+            for row in rows:
+                alerts.append({
+                    'id': row[0],
+                    'alert_time': row[1],
+                    'predicted_glucose_mgdl': row[2],
+                    'predicted_glucose_mmol': row[3],
+                    'risk_level': row[4],
+                    'alert_status': row[5],
+                    'acknowledged_at': row[6],
+                    'notification_sent': bool(row[7])
+                })
+            
+            return alerts
+            
+        except Exception as e:
+            logger.error(f"获取警报历史失败: {e}")
+            return []
+
+    def acknowledge_alert(self, alert_id: int) -> bool:
+        """确认警报"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE hypoglycemia_alerts 
+                SET alert_status = 'ACKNOWLEDGED', 
+                    acknowledged_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND alert_status = 'ACTIVE'
+            """, (alert_id,))
+            
+            affected_rows = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if affected_rows > 0:
+                logger.info(f"警报 {alert_id} 已确认")
+                return True
+            else:
+                logger.warning(f"未找到活跃的警报 {alert_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"确认警报失败: {e}")
+            return False
+
 # 创建全局实例
 monitor = NightscoutWebMonitor()
 
@@ -2298,7 +2731,7 @@ def api_meter_data():
     # 转换数据格式用于前端显示
     formatted_data = []
     try:
-        conn = sqlite3.connect("nightscout_data.db")
+        conn = sqlite3.connect(self.get_database_path())
         cursor = conn.cursor()
 
         for entry in meter_data:
@@ -2383,6 +2816,29 @@ def api_statistics():
         'cv_data': cv_data,
         'days': days
     })
+
+@app.route('/api/current-glucose')
+def api_current_glucose():
+    """获取当前血糖数据API"""
+    try:
+        # 获取最近的一条血糖数据
+        glucose_data = monitor.get_glucose_data_from_db(days=1)
+        if not glucose_data:
+            return jsonify({'error': '暂无血糖数据'}), 404
+
+        latest_entry = glucose_data[0]
+        
+        formatted_entry = {
+            'time': latest_entry.get('shanghai_time', ''),
+            'value_mgdl': latest_entry.get('sgv', 0),
+            'value_mmol': monitor.mg_dl_to_mmol_l(latest_entry.get('sgv', 0)),
+            'direction': latest_entry.get('direction', ''),
+            'trend': latest_entry.get('trend', 0)
+        }
+        return jsonify(formatted_entry)
+    except Exception as e:
+        logger.error(f"获取当前血糖数据失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/analysis')
 def api_analysis():
@@ -2753,6 +3209,124 @@ def api_unread_count():
         return jsonify({'unread_count': count})
     except Exception as e:
         logger.error(f"获取未读消息数量失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/predict', methods=['GET'])
+def api_predict_glucose():
+    """血糖预测API"""
+    try:
+        # 获取最近7天的血糖数据用于预测
+        glucose_data = monitor.get_glucose_data_from_db(days=7)
+        
+        # 检查用户配置是否启用了预测
+        config = monitor.get_user_alert_config()
+        if not config.get('enable_predictions', True):
+            return jsonify({'error': '血糖预测功能已禁用'}), 400
+        
+        # 执行预测
+        prediction_result = monitor.predict_glucose(glucose_data)
+        
+        # 保存预测结果
+        monitor.save_prediction_result(prediction_result)
+        
+        # 评估低血糖风险
+        risk_assessment = monitor.assess_hypoglycemia_risk(prediction_result['predicted_glucose_mgdl'])
+        
+        # 如果启用了警报且风险不为LOW，创建警报
+        if config.get('enable_alerts', True) and risk_assessment['risk_level'] != 'LOW':
+            alert_created = monitor.create_hypoglycemia_alert(risk_assessment)
+            if alert_created:
+                # 如果需要，可以在这里添加推送通知逻辑
+                pass
+        
+        return jsonify({
+            'prediction': prediction_result,
+            'risk_assessment': risk_assessment,
+            'status': 'success'
+        })
+        
+    except ValueError as ve:
+        logger.warning(f"血糖预测数据不足: {ve}")
+        return jsonify({'error': str(ve)}), 400
+    except Exception as e:
+        logger.error(f"血糖预测失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/config', methods=['GET', 'POST'])
+def api_alerts_config():
+    """获取或更新警报配置API"""
+    try:
+        if request.method == 'GET':
+            config = monitor.get_user_alert_config()
+            return jsonify(config)
+        
+        elif request.method == 'POST':
+            data = request.get_json()
+            
+            # 验证输入数据
+            if not data:
+                return jsonify({'error': '请求数据不能为空'}), 400
+            
+            # 验证阈值
+            high_threshold = data.get('high_risk_threshold_mgdl', 70)
+            medium_threshold = data.get('medium_risk_threshold_mgdl', 80)
+            
+            if high_threshold <= 0 or medium_threshold <= 0:
+                return jsonify({'error': '阈值必须大于0'}), 400
+            
+            if high_threshold >= medium_threshold:
+                return jsonify({'error': '高风险阈值必须小于中等风险阈值'}), 400
+            
+            # 更新配置
+            success = monitor.update_user_alert_config(data)
+            
+            if success:
+                return jsonify({'success': True, 'message': '警报配置已更新'})
+            else:
+                return jsonify({'error': '配置更新失败'}), 500
+                
+    except Exception as e:
+        logger.error(f"警报配置操作失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/history', methods=['GET'])
+def api_alerts_history():
+    """获取警报历史API"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        alerts = monitor.get_alert_history(limit)
+        
+        return jsonify({
+            'alerts': alerts,
+            'total_count': len(alerts)
+        })
+        
+    except Exception as e:
+        logger.error(f"获取警报历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/acknowledge', methods=['POST'])
+def api_alerts_acknowledge():
+    """确认警报API"""
+    try:
+        data = request.get_json()
+        if not data or 'alert_id' not in data:
+            return jsonify({'error': '缺少alert_id参数'}), 400
+        
+        alert_id = data['alert_id']
+        
+        if not isinstance(alert_id, int) or alert_id <= 0:
+            return jsonify({'error': 'alert_id必须是正整数'}), 400
+        
+        success = monitor.acknowledge_alert(alert_id)
+        
+        if success:
+            return jsonify({'success': True, 'message': '警报已确认'})
+        else:
+            return jsonify({'error': '警报确认失败，可能已不存在或已被确认'}), 404
+            
+    except Exception as e:
+        logger.error(f"确认警报失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/login', methods=['GET', 'POST'])
