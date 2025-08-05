@@ -2257,13 +2257,13 @@ class NightscoutWebMonitor:
             }
 
     def predict_glucose(self, glucose_data: List[Dict]) -> Dict:
-        """预测血糖值 - 加权移动平均 + 趋势外推算法"""
+        """预测血糖值 - 基于当前血糖值的趋势外推算法"""
         try:
             # 数据验证
-            if len(glucose_data) < 20:
-                raise ValueError("数据点不足，至少需要20个数据点")
+            if len(glucose_data) < 10:
+                raise ValueError("数据点不足，至少需要10个数据点")
             
-            # 验证数据时间范围（3-7天）
+            # 验证数据时间范围（1-7天）
             if glucose_data:
                 sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
                 if sorted_data:
@@ -2278,8 +2278,8 @@ class NightscoutWebMonitor:
                             time_diff = latest_dt - earliest_dt
                             days_diff = time_diff.total_seconds() / (24 * 3600)
                             
-                            if days_diff < 3:
-                                raise ValueError(f"数据时间范围不足，至少需要3天数据（当前：{days_diff:.1f}天）")
+                            if days_diff < 1:
+                                raise ValueError(f"数据时间范围不足，至少需要1天数据（当前：{days_diff:.1f}天）")
                             if days_diff > 7:
                                 raise ValueError(f"数据时间范围过长，最多支持7天数据（当前：{days_diff:.1f}天）")
                         except ValueError as ve:
@@ -2291,24 +2291,29 @@ class NightscoutWebMonitor:
             # 按时间排序（从旧到新）
             sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
             
-            # 获取最近的血糖值
+            # 获取当前血糖值（最新的血糖值）
+            current_glucose_mgdl = None
+            for entry in reversed(sorted_data):
+                sgv = entry.get('sgv', 0)
+                if sgv > 0:
+                    current_glucose_mgdl = sgv
+                    break
+            
+            if current_glucose_mgdl is None:
+                raise ValueError("无法获取当前血糖值")
+            
+            # 获取最近的血糖值用于趋势计算（最近10个数据点）
             recent_glucose_values = []
-            for entry in sorted_data[-20:]:  # 使用最近20个数据点
+            for entry in sorted_data[-10:]:
                 sgv = entry.get('sgv', 0)
                 if sgv > 0:
                     recent_glucose_values.append(sgv)
             
-            if len(recent_glucose_values) < 10:
+            if len(recent_glucose_values) < 5:
                 raise ValueError("有效的血糖数据点不足")
             
-            # 加权移动平均计算
-            weights = [i * 0.1 for i in range(1, len(recent_glucose_values) + 1)]
-            weighted_sum = sum(recent_glucose_values[i] * weights[i] for i in range(len(recent_glucose_values)))
-            weight_sum = sum(weights)
-            weighted_avg = weighted_sum / weight_sum
-            
-            # 趋势计算（使用最近5个数据点）
-            trend_values = recent_glucose_values[-5:]
+            # 趋势计算（使用最近5-10个数据点）
+            trend_values = recent_glucose_values[-5:] if len(recent_glucose_values) >= 5 else recent_glucose_values
             if len(trend_values) >= 2:
                 # 计算变化率
                 changes = []
@@ -2320,11 +2325,10 @@ class NightscoutWebMonitor:
                 
                 # 生成未来30分钟内的预测点（每5分钟一个，共6个点）
                 prediction_points = []
-                current_value = weighted_avg
                 
                 for i in range(1, 7):  # 5, 10, 15, 20, 25, 30分钟
                     projected_change = avg_change * i
-                    predicted_value = current_value + projected_change
+                    predicted_value = current_glucose_mgdl + projected_change
                     prediction_points.append({
                         'minutes_ahead': i * 5,
                         'predicted_glucose_mgdl': round(predicted_value, 1),
@@ -2333,13 +2337,13 @@ class NightscoutWebMonitor:
                 
                 predicted_glucose_mgdl = prediction_points[-1]['predicted_glucose_mgdl']
             else:
-                # 如果没有足够数据计算趋势，只使用加权平均
-                predicted_glucose_mgdl = weighted_avg
+                # 如果没有足够数据计算趋势，使用当前血糖值作为预测
+                predicted_glucose_mgdl = current_glucose_mgdl
                 avg_change = 0
                 prediction_points = []
             
             # 计算置信度（基于数据点数量和趋势一致性）
-            data_points_factor = min(len(recent_glucose_values) / 20, 1.0)
+            data_points_factor = min(len(recent_glucose_values) / 10, 1.0)
             
             # 趋势一致性因子（变化的标准差）
             if len(changes) > 1:
@@ -2353,13 +2357,16 @@ class NightscoutWebMonitor:
             
             # 单位转换
             predicted_glucose_mmol = round(predicted_glucose_mgdl / 18.0, 1)
+            current_glucose_mmol = round(current_glucose_mgdl / 18.0, 1)
             
             return {
                 'predicted_glucose_mgdl': round(predicted_glucose_mgdl, 1),
                 'predicted_glucose_mmol': predicted_glucose_mmol,
+                'current_glucose_mgdl': current_glucose_mgdl,
+                'current_glucose_mmol': current_glucose_mmol,
                 'confidence_score': confidence_score,
                 'trend_rate': round(avg_change, 2),
-                'algorithm_used': 'weighted_moving_average_trend_extrapolation',
+                'algorithm_used': 'current_value_trend_extrapolation',
                 'data_points_count': len(recent_glucose_values),
                 'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'prediction_points': prediction_points

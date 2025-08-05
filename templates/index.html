@@ -152,8 +152,7 @@
                         <h6 class="card-title text-info mb-2">
                             <i class="fas fa-chart-line"></i> 30分钟预测
                         </h6>
-                        <h4 id="predicted-glucose" class="mb-1">--</h4>
-                        <small class="text-muted">mmol/L</small>
+                        <p id="predicted-glucose" class="mb-2 text-primary">--</p>
                         <div id="prediction-confidence" class="mt-1">
                             <small class="badge bg-secondary">--</small>
                         </div>
@@ -1210,23 +1209,6 @@
                     pointHoverRadius: 12,
                     pointStyle: 'star',
                     rotation: 0
-                }, {
-                    label: '预测走势',
-                    data: [], // 初始为空，后续动态添加
-                    borderColor: 'rgb(255, 140, 0)',
-                    backgroundColor: 'rgba(255, 140, 0, 0.2)',
-                    borderDash: [10, 5],
-                    borderWidth: 3,
-                    fill: false,
-                    tension: 0.4,
-                    pointRadius: 6,
-                    pointHoverRadius: 8,
-                    pointBackgroundColor: 'rgb(255, 140, 0)',
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    pointStyle: 'circle',
-                    showLine: true,
-                    hidden: true // 初始隐藏，有数据时显示
                 }]
             },
             options: {
@@ -1631,9 +1613,9 @@
             return;
         }
         
-        // 更新预测血糖值
-        predictedGlucoseEl.textContent = prediction.predicted_glucose_mmol;
-        predictedGlucoseEl.className = `mb-1 ${getGlucoseColor(prediction.predicted_glucose_mmol)}`;
+        // 显示"预测"信息
+        predictedGlucoseEl.textContent = '预测';
+        predictedGlucoseEl.className = 'mb-2 text-primary';
         
         // 更新置信度
         const confidenceBadge = confidenceEl.querySelector('.badge');
@@ -1669,25 +1651,6 @@
             
             // 添加新的趋势信息
             confidenceEl.parentElement.appendChild(trendEl);
-        }
-        
-        // 添加预测开始时间
-        if (prediction.prediction_time) {
-            const startTimeEl = document.createElement('div');
-            startTimeEl.className = 'mt-1';
-            startTimeEl.innerHTML = `<small class="text-muted"><i class="fas fa-clock"></i> 预测开始时间: ${prediction.prediction_time}</small>`;
-            
-            // 移除旧的开始时间信息
-            const oldStartTimeEl = confidenceEl.parentElement.querySelector('.text-muted');
-            if (oldStartTimeEl) {
-                // 只移除预测开始时间相关的元素，保留其他text-muted元素
-                if (oldStartTimeEl.innerHTML.includes('预测开始时间')) {
-                    oldStartTimeEl.remove();
-                }
-            }
-            
-            // 添加新的开始时间信息
-            confidenceEl.parentElement.appendChild(startTimeEl);
         }
         
         // 更新风险指示器
@@ -1763,6 +1726,7 @@
         
         if (Math.abs(trendChange) < 0.1) {
             trendDirection = '平稳';
+            trendMagnitude = '';
         } else if (trendChange > 0) {
             trendDirection = '上升';
             if (trendChange < 0.5) {
@@ -1783,8 +1747,8 @@
             }
         }
         
-        const trendText = trendMagnitude ? `${trendMagnitude}${trendDirection}` : trendDirection;
-        return `30分钟趋势: ${trendText} (${firstPoint.predicted_glucose_mmol} → ${lastPoint.predicted_glucose_mmol} mmol/L)`;
+        const trendText = trendDirection; // 直接使用趋势方向，包括"平稳"
+        return `趋势预测：30分钟（${trendText}）${firstPoint.predicted_glucose_mmol} → ${lastPoint.predicted_glucose_mmol} mmol/L`;
     }
     
     // 手动预测函数
@@ -2101,151 +2065,6 @@
             
         } catch (error) {
             console.error('图表更新失败:', error);
-        }
-    }
-    
-    // 格式化预测时间，确保与原始数据格式一致
-    function formatPredictionTime(date) {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        const seconds = String(date.getSeconds()).padStart(2, '0');
-        
-        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-    }
-    
-    // 数据验证函数
-    function validatePredictionData(prediction) {
-        console.log('=== validatePredictionData 开始 ===');
-        console.log('验证预测数据:', prediction);
-        
-        const errors = [];
-        const warnings = [];
-        
-        // 基本结构验证
-        if (!prediction) {
-            errors.push('预测数据为空');
-            return { valid: false, errors, warnings };
-        }
-        
-        // 必需字段验证
-        if (!prediction.predicted_glucose_mmol) {
-            errors.push('缺少预测血糖值');
-        } else if (typeof prediction.predicted_glucose_mmol !== 'number' || isNaN(prediction.predicted_glucose_mmol)) {
-            errors.push('预测血糖值无效');
-        } else if (prediction.predicted_glucose_mmol < 0 || prediction.predicted_glucose_mmol > 40) {
-            warnings.push('预测血糖值超出正常范围');
-        }
-        
-        if (!prediction.confidence_score) {
-            warnings.push('缺少置信度评分');
-        } else if (typeof prediction.confidence_score !== 'number' || prediction.confidence_score < 0 || prediction.confidence_score > 100) {
-            errors.push('置信度评分无效');
-        }
-        
-        // 预测点数据验证
-        if (prediction.prediction_points) {
-            if (!Array.isArray(prediction.prediction_points)) {
-                errors.push('预测点数据格式无效');
-            } else {
-                prediction.prediction_points.forEach((point, index) => {
-                    if (!point.minutes_ahead || !point.predicted_glucose_mmol) {
-                        errors.push(`预测点${index + 1}数据不完整`);
-                    } else if (typeof point.predicted_glucose_mmol !== 'number' || isNaN(point.predicted_glucose_mmol)) {
-                        errors.push(`预测点${index + 1}血糖值无效`);
-                    }
-                });
-            }
-        }
-        
-        // 验证结果
-        const isValid = errors.length === 0;
-        console.log('验证结果:', {
-            valid: isValid,
-            errors: errors,
-            warnings: warnings
-        });
-        
-        return {
-            valid: isValid,
-            errors: errors,
-            warnings: warnings
-        };
-    }
-    
-    // 图表状态检查函数
-    function checkChartState() {
-        console.log('=== checkChartState 开始 ===');
-        
-        const state = {
-            chartExists: !!glucoseChart,
-            chartData: null,
-            datasetsCount: 0,
-            labelsCount: 0,
-            predictionDatasetExists: false,
-            chartConfig: null
-        };
-        
-        if (glucoseChart) {
-            try {
-                state.chartData = glucoseChart.data;
-                state.datasetsCount = glucoseChart.data.datasets.length;
-                state.labelsCount = glucoseChart.data.labels.length;
-                state.predictionDatasetExists = glucoseChart.data.datasets.some(dataset => dataset.label === '预测走势');
-                state.chartConfig = glucoseChart.config;
-                
-                console.log('图表状态:', state);
-            } catch (error) {
-                console.error('获取图表状态失败:', error);
-                state.error = error.message;
-            }
-        }
-        
-        return state;
-    }
-    
-    // 安全的图表更新函数
-    function safeChartUpdate(updateFn) {
-        console.log('=== safeChartUpdate 开始 ===');
-        
-        if (!glucoseChart) {
-            console.error('图表不存在，无法安全更新');
-            return false;
-        }
-        
-        const chartState = checkChartState();
-        
-        try {
-            // 执行更新函数
-            const result = updateFn(chartState);
-            
-            // 更新图表
-            glucoseChart.update();
-            console.log('图表安全更新成功');
-            return true;
-            
-        } catch (error) {
-            console.error('图表更新失败:', error);
-            console.error('错误详情:', {
-                message: error.message,
-                stack: error.stack,
-                chartState: chartState
-            });
-            
-            // 尝试恢复图表状态
-            try {
-                if (chartState.chartData) {
-                    glucoseChart.data = chartState.chartData;
-                    glucoseChart.update();
-                    console.log('图表状态恢复成功');
-                }
-            } catch (recoveryError) {
-                console.error('图表状态恢复失败:', recoveryError);
-            }
-            
-            return false;
         }
     }
     
