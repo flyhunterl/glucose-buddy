@@ -866,7 +866,7 @@ class NightscoutWebMonitor:
             meter_data = []
             for row in rows:
                 meter_data.append({
-                    "dateString": row[0],
+                    "date_string": row[0],
                     "shanghai_time": row[1],
                     "sgv": row[2]
                 })
@@ -2721,51 +2721,53 @@ def api_activity_data():
 
 @app.route('/api/meter-data')
 def api_meter_data():
-    """获取指尖血糖数据API"""
+    """获取指尖血糖数据API - 和报表逻辑完全一致"""
     days = request.args.get('days', 7, type=int)
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     
+    # 直接获取数据，和报表逻辑完全一致
     meter_data = monitor.get_meter_data_from_db(days=days, start_date=start_date, end_date=end_date)
-
-    # 转换数据格式用于前端显示
+    
+    # 转换数据格式用于前端显示 - 完全对标报表逻辑
     formatted_data = []
-    try:
-        conn = sqlite3.connect(self.get_database_path())
-        cursor = conn.cursor()
-
-        for entry in meter_data:
-            # 获取指尖血糖的时间
-            meter_time_str = entry.get('dateString', '')
-            if not meter_time_str:
-                continue
+    for entry in meter_data:
+        if entry.get("sgv"):
+            # 确保指尖血糖数据以mmol/L单位处理 - 和报表完全一致
+            mmol_value = float(entry["sgv"])
             
             # 寻找最接近的CGM血糖值
-            # 使用 julianday 函数来计算时间差
-            query = """
-                SELECT sgv
-                FROM glucose_data
-                ORDER BY ABS(julianday(?) - julianday(date_string))
-                LIMIT 1
-            """
-            cursor.execute(query, (meter_time_str,))
-            closest_cgm_row = cursor.fetchone()
+            cgm_mmol = None
+            try:
+                conn = sqlite3.connect(monitor.get_database_path())
+                cursor = conn.cursor()
+                
+                meter_time_str = entry.get('date_string', '')
+                if meter_time_str:
+                    query = """
+                        SELECT sgv
+                        FROM glucose_data
+                        ORDER BY ABS(julianday(?) - julianday(date_string))
+                        LIMIT 1
+                    """
+                    cursor.execute(query, (meter_time_str,))
+                    closest_cgm_row = cursor.fetchone()
+                    
+                    if closest_cgm_row and closest_cgm_row[0]:
+                        cgm_mmol = monitor.mg_dl_to_mmol_l(closest_cgm_row[0])
+                
+                conn.close()
+            except Exception as e:
+                logger.error(f"获取CGM血糖值失败: {e}")
+                if 'conn' in locals():
+                    conn.close()
             
-            cgm_sgv = closest_cgm_row[0] if closest_cgm_row else None
-            cgm_mmol = monitor.mg_dl_to_mmol_l(cgm_sgv) if cgm_sgv is not None else None
-
-            # 指尖血糖数据已经是mmol/L单位，无需转换
             formatted_data.append({
                 'time': entry.get('shanghai_time', ''),
-                'value_mmol': float(entry.get('sgv', 0)),  # 直接使用mmol/L
+                'value_mmol': mmol_value,
                 'cgm_value_mmol': cgm_mmol
             })
-    except Exception as e:
-        logger.error(f"处理指尖血糖数据时出错: {e}")
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
-
+    
     return jsonify(formatted_data)
 
 @app.route('/api/statistics')
