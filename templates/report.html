@@ -204,6 +204,133 @@
         </div>
     </div>
 
+    <!-- 当前治疗方案 -->
+    <div class="row mb-4 print-section print-treatment">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-pills"></i> 当前治疗方案
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% set treatment_plan = config.treatment_plan %}
+                    
+                    <!-- 药物治疗 -->
+                    {% if treatment_plan.medications and treatment_plan.medications|length > 0 %}
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3">
+                            <i class="fas fa-capsules me-2"></i>药物治疗
+                        </h6>
+                        
+                        <!-- 屏幕显示：传统卡片布局 -->
+                        <div class="screen-medications row">
+                            {% for med in treatment_plan.medications %}
+                            <div class="col-md-6 mb-3">
+                                <div class="card border-light">
+                                    <div class="card-body py-2">
+                                        <div class="d-flex align-items-center">
+                                            <div class="flex-grow-1">
+                                                <strong class="text-dark">{{ med.name }}</strong>
+                                                <span class="text-muted ms-2">{{ med.dosage }}{{ med.unit }}</span>
+                                                {% if med.usage %}
+                                                <div class="small text-muted mt-1">
+                                                    <i class="fas fa-clock me-1"></i>{{ med.usage }}
+                                                </div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        
+                        <!-- 打印显示：紧凑布局 -->
+                        <div class="print-medications">
+                            <div class="medication-row mb-2">
+                                {% for med in treatment_plan.medications %}
+                                <span class="medication-item">
+                                    <strong>{{ med.name }}</strong>
+                                    <span class="med-dosage">{{ med.dosage }}{{ med.unit }}</span>
+                                    {% if med.usage %}
+                                    <span class="med-usage">({{ med.usage }})</span>
+                                    {% endif %}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- 胰岛素注射 -->
+                    {% if treatment_plan.insulin_enabled %}
+                    <div class="mb-3">
+                        <h6 class="text-info mb-3">
+                            <i class="fas fa-syringe me-2"></i>胰岛素注射
+                        </h6>
+                        
+                        <!-- 屏幕显示：传统布局 -->
+                        <div class="screen-insulin row">
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <span class="fw-bold me-3">注射剂量：</span>
+                                    <span class="badge bg-primary fs-6">{{ treatment_plan.insulin_dosage }} 单位</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-flex align-items-center mb-2">
+                                    <span class="fw-bold me-3">注射频率：</span>
+                                    <span class="badge bg-info fs-6">
+                                        {% if treatment_plan.insulin_frequency == 'custom' and treatment_plan.insulin_custom_frequency %}
+                                            {{ treatment_plan.insulin_custom_frequency }}
+                                        {% elif treatment_plan.insulin_frequency %}
+                                            {{ treatment_plan.insulin_frequency }}
+                                        {% else %}
+                                            未设置
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 打印显示：紧凑布局 -->
+                        <div class="print-insulin">
+                            <div class="insulin-row">
+                                <span class="insulin-item">
+                                    <span class="insulin-label">剂量:</span>
+                                    <span class="insulin-value">{{ treatment_plan.insulin_dosage }}单位</span>
+                                </span>
+                                <span class="insulin-item">
+                                    <span class="insulin-label">频率:</span>
+                                    <span class="insulin-value">
+                                        {% if treatment_plan.insulin_frequency == 'custom' and treatment_plan.insulin_custom_frequency %}
+                                            {{ treatment_plan.insulin_custom_frequency }}
+                                        {% elif treatment_plan.insulin_frequency %}
+                                            {{ treatment_plan.insulin_frequency }}
+                                        {% else %}
+                                            未设置
+                                        {% endif %}
+                                    </span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- 无治疗方案提示 -->
+                    {% if not treatment_plan.medications and not treatment_plan.insulin_enabled %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-info-circle text-muted fs-1 mb-3"></i>
+                        <p class="text-muted mb-0">暂无治疗方案记录</p>
+                        <small class="text-muted">请在配置页面中设置您的治疗方案</small>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 每日血糖表格 -->
     <div class="row print-section print-daily">
         <div class="col-12">
@@ -482,6 +609,12 @@
                         <i class="fas fa-tint"></i> 指尖血糖记录
                     </label>
                 </div>
+                <div class="form-check mb-2">
+                    <input class="form-check-input print-section-checkbox" type="checkbox" id="printTreatment" value="treatment" checked>
+                    <label class="form-check-label" for="printTreatment">
+                        <i class="fas fa-pills"></i> 当前治疗方案
+                    </label>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -575,6 +708,101 @@
     .print-disclaimer {
         display: block !important;
     }
+
+    /* 治疗方案打印样式 - 紧凑布局 */
+    .print-treatment .screen-medications,
+    .print-treatment .screen-insulin {
+        display: none !important;
+    }
+    
+    .print-treatment .print-medications,
+    .print-treatment .print-insulin {
+        display: block !important;
+    }
+    
+    /* 药物打印布局 - 一行显示3-4个 */
+    .print-treatment .medication-row {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 0.5rem 1.5rem !important;
+        margin-bottom: 0.5rem !important;
+        line-height: 1.2 !important;
+    }
+    
+    .print-treatment .medication-item {
+        display: inline-block !important;
+        font-size: 9pt !important;
+        border: 1px solid #dee2e6 !important;
+        padding: 0.2rem 0.4rem !important;
+        background-color: #f8f9fa !important;
+        border-radius: 3px !important;
+        margin: 0 !important;
+    }
+    
+    .print-treatment .medication-item strong {
+        color: #000 !important;
+        font-weight: 600 !important;
+        margin-right: 0.3rem !important;
+    }
+    
+    .print-treatment .med-dosage {
+        color: #495057 !important;
+        font-weight: normal !important;
+        margin-right: 0.3rem !important;
+    }
+    
+    .print-treatment .med-usage {
+        color: #6c757d !important;
+        font-size: 8pt !important;
+        font-weight: normal !important;
+    }
+    
+    /* 胰岛素打印布局 - 紧凑一行显示 */
+    .print-treatment .insulin-row {
+        display: flex !important;
+        gap: 1rem 2rem !important;
+        margin-bottom: 0.5rem !important;
+        align-items: center !important;
+    }
+    
+    .print-treatment .insulin-item {
+        display: inline-flex !important;
+        align-items: center !important;
+        font-size: 9pt !important;
+        border: 1px solid #b3d7ff !important;
+        padding: 0.2rem 0.4rem !important;
+        background-color: #e7f3ff !important;
+        border-radius: 3px !important;
+    }
+    
+    .print-treatment .insulin-label {
+        color: #004085 !important;
+        font-weight: 600 !important;
+        margin-right: 0.3rem !important;
+    }
+    
+    .print-treatment .insulin-value {
+        color: #004085 !important;
+        font-weight: normal !important;
+    }
+    
+    /* 标题样式优化 */
+    .print-treatment h6 {
+        font-size: 11pt !important;
+        margin-bottom: 0.8rem !important;
+        color: #000 !important;
+        border-bottom: 1px solid #dee2e6 !important;
+        padding-bottom: 0.3rem !important;
+    }
+    
+    /* 减少整体间距 */
+    .print-treatment .mb-4 {
+        margin-bottom: 1rem !important;
+    }
+    
+    .print-treatment .mb-3 {
+        margin-bottom: 0.8rem !important;
+    }
     
     .print-footer {
         display: block !important;
@@ -596,6 +824,17 @@
 
 .print-footer {
     display: none;
+}
+
+/* 屏幕显示样式 */
+.print-medications,
+.print-insulin {
+    display: none !important;
+}
+
+.screen-medications,
+.screen-insulin {
+    display: block !important;
 }
 
 .meter-value {

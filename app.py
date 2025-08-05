@@ -2636,7 +2636,8 @@ def report_page():
             'end_date': end_date,
             'generation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'summary': report_data.get('summary', {}),
-            'daily_data': report_data.get('daily_data', [])
+            'daily_data': report_data.get('daily_data', []),
+            'config': monitor.config
         }
         
         return render_template('report.html', **context)
@@ -2651,6 +2652,10 @@ def report_page():
             'summary': {},
             'daily_data': []
         }
+        
+        # 添加配置数据到上下文
+        context['config'] = monitor.config
+        
         return render_template('report.html', **context)
 
 @app.route('/api/report-data')
