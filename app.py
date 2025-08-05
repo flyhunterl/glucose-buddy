@@ -2318,14 +2318,25 @@ class NightscoutWebMonitor:
                 
                 avg_change = sum(changes) / len(changes)
                 
-                # 趋势外推30分钟
-                # 假设数据点间隔约5分钟，30分钟相当于6个间隔
-                projected_change = avg_change * 6
-                predicted_glucose_mgdl = weighted_avg + projected_change
+                # 生成未来30分钟内的预测点（每5分钟一个，共6个点）
+                prediction_points = []
+                current_value = weighted_avg
+                
+                for i in range(1, 7):  # 5, 10, 15, 20, 25, 30分钟
+                    projected_change = avg_change * i
+                    predicted_value = current_value + projected_change
+                    prediction_points.append({
+                        'minutes_ahead': i * 5,
+                        'predicted_glucose_mgdl': round(predicted_value, 1),
+                        'predicted_glucose_mmol': round(predicted_value / 18.0, 1)
+                    })
+                
+                predicted_glucose_mgdl = prediction_points[-1]['predicted_glucose_mgdl']
             else:
                 # 如果没有足够数据计算趋势，只使用加权平均
                 predicted_glucose_mgdl = weighted_avg
                 avg_change = 0
+                prediction_points = []
             
             # 计算置信度（基于数据点数量和趋势一致性）
             data_points_factor = min(len(recent_glucose_values) / 20, 1.0)
@@ -2350,7 +2361,8 @@ class NightscoutWebMonitor:
                 'trend_rate': round(avg_change, 2),
                 'algorithm_used': 'weighted_moving_average_trend_extrapolation',
                 'data_points_count': len(recent_glucose_values),
-                'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'prediction_points': prediction_points
             }
             
         except Exception as e:

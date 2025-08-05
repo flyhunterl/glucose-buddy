@@ -40,6 +40,9 @@
                             <button class="btn btn-info btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="openMessageInbox()">
                                 <i class="fas fa-envelope"></i> <span class="d-none d-sm-inline">消息记录</span>
                             </button>
+                            <button class="btn btn-warning btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="manualPrediction()">
+                                <i class="fas fa-chart-line"></i> <span class="d-none d-sm-inline">重新预测</span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1207,6 +1210,23 @@
                     pointHoverRadius: 12,
                     pointStyle: 'star',
                     rotation: 0
+                }, {
+                    label: '预测走势',
+                    data: [], // 初始为空，后续动态添加
+                    borderColor: 'rgb(255, 140, 0)',
+                    backgroundColor: 'rgba(255, 140, 0, 0.2)',
+                    borderDash: [10, 5],
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 6,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: 'rgb(255, 140, 0)',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointStyle: 'circle',
+                    showLine: true,
+                    hidden: true // 初始隐藏，有数据时显示
                 }]
             },
             options: {
@@ -1607,38 +1627,85 @@
         const confidenceEl = document.getElementById('prediction-confidence');
         const riskIndicatorEl = document.getElementById('risk-indicator');
         
+        if (!predictedGlucoseEl || !confidenceEl || !riskIndicatorEl) {
+            return;
+        }
+        
         // 更新预测血糖值
         predictedGlucoseEl.textContent = prediction.predicted_glucose_mmol;
+        predictedGlucoseEl.className = `mb-1 ${getGlucoseColor(prediction.predicted_glucose_mmol)}`;
         
         // 更新置信度
         const confidenceBadge = confidenceEl.querySelector('.badge');
-        confidenceBadge.textContent = `置信度 ${prediction.confidence_score}%`;
-        
-        // 更新置信度颜色
-        if (prediction.confidence_score >= 80) {
-            confidenceBadge.className = 'badge bg-success';
-        } else if (prediction.confidence_score >= 60) {
-            confidenceBadge.className = 'badge bg-warning';
+        if (confidenceBadge) {
+            const confidenceText = `置信度 ${prediction.confidence_score}%`;
+            confidenceBadge.textContent = confidenceText;
+            
+            // 更新置信度颜色
+            if (prediction.confidence_score >= 80) {
+                confidenceBadge.className = 'badge bg-success';
+            } else if (prediction.confidence_score >= 60) {
+                confidenceBadge.className = 'badge bg-warning';
+            } else {
+                confidenceBadge.className = 'badge bg-danger';
+            }
         } else {
-            confidenceBadge.className = 'badge bg-danger';
+            // 备用方案：直接创建badge元素
+            confidenceEl.innerHTML = `<small class="badge ${getConfidenceBadgeClass(prediction.confidence_score)}">置信度 ${prediction.confidence_score}%</small>`;
+        }
+        
+        // 添加预测趋势信息
+        if (prediction.prediction_points && prediction.prediction_points.length > 0) {
+            const trendText = getTrendDescription(prediction.prediction_points);
+            const trendEl = document.createElement('div');
+            trendEl.className = 'mt-2';
+            trendEl.innerHTML = `<small class="text-info"><i class="fas fa-chart-line"></i> ${trendText}</small>`;
+            
+            // 移除旧的趋势信息
+            const oldTrendEl = confidenceEl.parentElement.querySelector('.text-info');
+            if (oldTrendEl) {
+                oldTrendEl.remove();
+            }
+            
+            // 添加新的趋势信息
+            confidenceEl.parentElement.appendChild(trendEl);
+        }
+        
+        // 添加预测开始时间
+        if (prediction.prediction_time) {
+            const startTimeEl = document.createElement('div');
+            startTimeEl.className = 'mt-1';
+            startTimeEl.innerHTML = `<small class="text-muted"><i class="fas fa-clock"></i> 预测开始时间: ${prediction.prediction_time}</small>`;
+            
+            // 移除旧的开始时间信息
+            const oldStartTimeEl = confidenceEl.parentElement.querySelector('.text-muted');
+            if (oldStartTimeEl) {
+                // 只移除预测开始时间相关的元素，保留其他text-muted元素
+                if (oldStartTimeEl.innerHTML.includes('预测开始时间')) {
+                    oldStartTimeEl.remove();
+                }
+            }
+            
+            // 添加新的开始时间信息
+            confidenceEl.parentElement.appendChild(startTimeEl);
         }
         
         // 更新风险指示器
         const riskBadge = riskIndicatorEl.querySelector('.badge');
-        riskBadge.textContent = getRiskText(risk_assessment.risk_level);
-        
-        // 更新风险指示器颜色
-        if (risk_assessment.risk_level === 'HIGH') {
-            riskBadge.className = 'badge bg-danger';
-        } else if (risk_assessment.risk_level === 'MEDIUM') {
-            riskBadge.className = 'badge bg-warning';
+        if (riskBadge) {
+            riskBadge.textContent = getRiskText(risk_assessment.risk_level);
+            
+            // 更新风险指示器颜色
+            if (risk_assessment.risk_level === 'HIGH') {
+                riskBadge.className = 'badge bg-danger';
+            } else if (risk_assessment.risk_level === 'MEDIUM') {
+                riskBadge.className = 'badge bg-warning';
+            } else {
+                riskBadge.className = 'badge bg-success';
+            }
         } else {
-            riskBadge.className = 'badge bg-success';
-        }
-        
-        // 如果有图表数据，更新图表显示预测
-        if (glucoseChart) {
-            updateChartWithPrediction(prediction);
+            // 备用方案：直接创建badge元素
+            riskIndicatorEl.innerHTML = `<small class="badge ${getRiskBadgeClass(risk_assessment.risk_level)}">${getRiskText(risk_assessment.risk_level)}</small>`;
         }
     }
     
@@ -1654,6 +1721,138 @@
             default:
                 return '未知风险';
         }
+    }
+    
+    // 获取置信度badge类名
+    function getConfidenceBadgeClass(confidence_score) {
+        if (confidence_score >= 80) {
+            return 'bg-success';
+        } else if (confidence_score >= 60) {
+            return 'bg-warning';
+        } else {
+            return 'bg-danger';
+        }
+    }
+    
+    // 获取风险badge类名
+    function getRiskBadgeClass(risk_level) {
+        switch (risk_level) {
+            case 'HIGH':
+                return 'bg-danger';
+            case 'MEDIUM':
+                return 'bg-warning';
+            case 'LOW':
+                return 'bg-success';
+            default:
+                return 'bg-secondary';
+        }
+    }
+    
+    // 获取趋势描述文本
+    function getTrendDescription(prediction_points) {
+        if (!prediction_points || prediction_points.length === 0) {
+            return '';
+        }
+        
+        const firstPoint = prediction_points[0];
+        const lastPoint = prediction_points[prediction_points.length - 1];
+        const trendChange = lastPoint.predicted_glucose_mmol - firstPoint.predicted_glucose_mmol;
+        
+        let trendDirection = '';
+        let trendMagnitude = '';
+        
+        if (Math.abs(trendChange) < 0.1) {
+            trendDirection = '平稳';
+        } else if (trendChange > 0) {
+            trendDirection = '上升';
+            if (trendChange < 0.5) {
+                trendMagnitude = '缓慢';
+            } else if (trendChange < 1.0) {
+                trendMagnitude = '中度';
+            } else {
+                trendMagnitude = '快速';
+            }
+        } else {
+            trendDirection = '下降';
+            if (Math.abs(trendChange) < 0.5) {
+                trendMagnitude = '缓慢';
+            } else if (Math.abs(trendChange) < 1.0) {
+                trendMagnitude = '中度';
+            } else {
+                trendMagnitude = '快速';
+            }
+        }
+        
+        const trendText = trendMagnitude ? `${trendMagnitude}${trendDirection}` : trendDirection;
+        return `30分钟趋势: ${trendText} (${firstPoint.predicted_glucose_mmol} → ${lastPoint.predicted_glucose_mmol} mmol/L)`;
+    }
+    
+    // 手动预测函数
+    function manualPrediction() {
+        // 显示预测进行中状态
+        const predictedGlucoseEl = document.getElementById('predicted-glucose');
+        const confidenceEl = document.getElementById('prediction-confidence');
+        const riskIndicatorEl = document.getElementById('risk-indicator');
+        
+        if (predictedGlucoseEl) {
+            predictedGlucoseEl.textContent = '--';
+        }
+        if (confidenceEl) {
+            confidenceEl.innerHTML = '<span class="text-muted">预测中...</span>';
+        }
+        if (riskIndicatorEl) {
+            riskIndicatorEl.innerHTML = '<small class="badge bg-secondary">--</small>';
+        }
+        
+        // 调用预测API
+        fetch('/api/predict')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    updatePredictionDisplay(data.prediction, data.risk_assessment);
+                    showNotification('预测已更新', 'success');
+                } else {
+                    // 显示错误信息
+                    if (confidenceEl) {
+                        confidenceEl.innerHTML = '<span class="text-muted">预测失败</span>';
+                    }
+                    showNotification('预测失败: ' + (data.error || '未知错误'), 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('手动预测失败:', error);
+                if (confidenceEl) {
+                    confidenceEl.innerHTML = '<span class="text-muted">网络错误</span>';
+                }
+                showNotification('网络连接失败，请重试', 'danger');
+            });
+    }
+    
+    // 显示通知函数
+    function showNotification(message, type = 'info') {
+        // 创建通知元素
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 350px;';
+        
+        notification.innerHTML = `
+            <div class="d-flex align-items-center">
+                <i class="fas fa-${type === 'error' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
+                <div>
+                    <p class="mb-0">${message}</p>
+                </div>
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // 自动关闭
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 5000);
     }
     
     // 显示警报
@@ -1694,48 +1893,360 @@
     
     // 更新图表显示预测
     function updateChartWithPrediction(prediction) {
-        if (!glucoseChart) return;
+        console.log('=== updateChartWithPrediction 开始 ===');
+        console.log('预测数据:', prediction);
+        
+        if (!glucoseChart) {
+            console.error('图表不存在，无法更新预测数据');
+            return;
+        }
         
         // 获取当前图表数据
         const currentData = glucoseChart.data;
+        console.log('当前图表数据标签数量:', currentData.labels.length);
+        console.log('当前图表数据集数量:', currentData.datasets.length);
         
-        // 计算预测点的时间
+        // 计算预测点的时间基准
         const lastTime = currentData.labels[currentData.labels.length - 1];
-        const predictionTime = new Date(lastTime + 'Z');
-        predictionTime.setMinutes(predictionTime.getMinutes() + 30);
+        console.log('最后一个时间点:', lastTime);
         
-        // 添加预测数据点
-        currentData.labels.push(predictionTime.toISOString());
-        
-        // 添加预测数据集（如果不存在）
-        let predictionDataset = currentData.datasets.find(dataset => dataset.label === '预测血糖');
-        if (!predictionDataset) {
-            predictionDataset = {
-                label: '预测血糖',
-                data: new Array(currentData.labels.length - 1).fill(null),
-                borderColor: 'rgb(255, 99, 132)',
-                backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                borderDash: [5, 5],
-                fill: false,
-                tension: 0.1
-            };
-            currentData.datasets.push(predictionDataset);
+        // 修复时间处理：支持多种格式，避免时区问题
+        let baseTime;
+        try {
+            // 尝试直接解析时间字符串
+            if (lastTime.includes('T')) {
+                // ISO格式时间
+                baseTime = new Date(lastTime);
+            } else {
+                // 本地格式时间
+                baseTime = new Date(lastTime.replace(' ', 'T'));
+            }
+            
+            if (isNaN(baseTime.getTime())) {
+                throw new Error('时间解析失败');
+            }
+            
+            console.log('基准时间解析成功:', baseTime.toISOString());
+        } catch (error) {
+            console.error('时间解析失败，使用当前时间:', error);
+            baseTime = new Date();
         }
         
-        // 添加预测值
-        predictionDataset.data.push(prediction.predicted_glucose_mmol);
+        // 查找现有的预测数据集
+        const predictionDatasetIndex = currentData.datasets.findIndex(dataset => dataset.label === '预测走势');
+        let predictionDataset;
         
-        // 更新图表
-        glucoseChart.update();
+        if (predictionDatasetIndex !== -1) {
+            // 使用现有的预测数据集
+            predictionDataset = currentData.datasets[predictionDatasetIndex];
+            console.log('使用现有的预测数据集，索引:', predictionDatasetIndex);
+            
+            // 重置数据，为现有数据点填充null
+            predictionDataset.data = new Array(currentData.labels.length).fill(null);
+            // 确保数据集可见
+            predictionDataset.hidden = false;
+        } else {
+            // 创建新的预测数据集 - 优化配置
+            predictionDataset = {
+                label: '预测走势',
+                data: new Array(currentData.labels.length).fill(null), // 为现有数据点填充null
+                borderColor: 'rgb(255, 140, 0)', // 深橙色，更醒目
+                backgroundColor: 'rgba(255, 140, 0, 0.2)', // 增加背景透明度
+                borderDash: [10, 5], // 优化虚线样式
+                borderWidth: 3, // 增加线宽
+                fill: false,
+                tension: 0.4, // 增加曲线平滑度
+                pointRadius: 6, // 增加点大小
+                pointHoverRadius: 8, // 增加悬停点大小
+                pointBackgroundColor: 'rgb(255, 140, 0)',
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2,
+                pointStyle: 'circle',
+                showLine: true,
+                hidden: false
+            };
+            console.log('创建新的预测数据集');
+        }
         
-        // 30秒后移除预测点
-        setTimeout(() => {
-            if (glucoseChart) {
-                currentData.labels.pop();
-                predictionDataset.data.pop();
-                glucoseChart.update();
+        console.log('创建预测数据集:', predictionDataset);
+        
+        // 添加预测时间点和数据
+        const predictionLabels = [];
+        const predictionValues = [];
+        
+        if (prediction.prediction_points && prediction.prediction_points.length > 0) {
+            console.log('使用多预测点数据，数量:', prediction.prediction_points.length);
+            
+            // 使用新的多预测点数据
+            prediction.prediction_points.forEach((point, index) => {
+                const predictionTime = new Date(baseTime);
+                predictionTime.setMinutes(predictionTime.getMinutes() + point.minutes_ahead);
+                
+                // 格式化为与原始数据一致的格式
+                const formattedTime = formatPredictionTime(predictionTime);
+                console.log(`预测点${index + 1}: ${point.minutes_ahead}分钟后, 时间: ${formattedTime}, 血糖: ${point.predicted_glucose_mmol}`);
+                
+                predictionLabels.push(formattedTime);
+                predictionValues.push(point.predicted_glucose_mmol);
+            });
+        } else {
+            console.log('使用单一预测点数据');
+            
+            // 兼容旧的单一预测点数据
+            const predictionTime = new Date(baseTime);
+            predictionTime.setMinutes(predictionTime.getMinutes() + 30);
+            
+            const formattedTime = formatPredictionTime(predictionTime);
+            console.log(`单一预测点: 30分钟后, 时间: ${formattedTime}, 血糖: ${prediction.predicted_glucose_mmol}`);
+            
+            predictionLabels.push(formattedTime);
+            predictionValues.push(prediction.predicted_glucose_mmol);
+        }
+        
+        console.log('生成的预测标签:', predictionLabels);
+        console.log('生成的预测值:', predictionValues);
+        
+        // 将预测数据添加到数据集
+        predictionDataset.data = predictionDataset.data.concat(predictionValues);
+        
+        // 将预测时间标签添加到图表
+        const beforeLabelsCount = currentData.labels.length;
+        currentData.labels.push(...predictionLabels);
+        const afterLabelsCount = currentData.labels.length;
+        console.log(`添加预测标签: ${beforeLabelsCount} -> ${afterLabelsCount}`);
+        
+        // 如果是新创建的数据集，则添加到图表
+        if (predictionDatasetIndex === -1) {
+            currentData.datasets.push(predictionDataset);
+            console.log('添加新预测数据集到图表');
+        }
+        
+        console.log('最终数据集数量:', currentData.datasets.length);
+        console.log('最终标签数量:', currentData.labels.length);
+        
+        // 动态调整图表配置以确保预测点可见
+        if (glucoseChart.options && glucoseChart.options.scales && glucoseChart.options.scales.x) {
+            console.log('动态调整图表x轴配置');
+            
+            // 临时增加x轴的最大刻度限制以显示预测点
+            const xTicksConfig = glucoseChart.options.scales.x.ticks;
+            const originalMaxTicksLimit = xTicksConfig.maxTicksLimit || 10;
+            
+            // 根据标签数量动态调整刻度限制
+            const recommendedMaxTicks = Math.min(20, Math.max(12, currentData.labels.length / 10));
+            xTicksConfig.maxTicksLimit = recommendedMaxTicksLimit;
+            
+            console.log(`调整x轴最大刻度数从${originalMaxTicksLimit}到${recommendedMaxTicksLimit}`);
+            
+            // 暂时减少最大旋转角度以确保时间标签可读
+            const originalMaxRotation = xTicksConfig.maxRotation || 0;
+            xTicksConfig.maxRotation = 30;
+            console.log(`调整x轴标签最大旋转角度从${originalMaxRotation}到30度`);
+        }
+        
+        try {
+            // 更新图表
+            glucoseChart.update();
+            console.log('图表更新成功');
+            
+            // 自动滚动图表到预测点位置
+            setTimeout(() => {
+                if (glucoseChart && predictionLabels.length > 0) {
+                    console.log('自动滚动图表以显示预测点');
+                    try {
+                        // 强制图表重绘并滚动到最新数据
+                        glucoseChart.update('active');
+                        
+                        // 获取图表的画布元素
+                        const canvas = glucoseChart.canvas;
+                        if (canvas) {
+                            // 滚动到画布的右侧（最新数据）
+                            canvas.parentElement.scrollLeft = canvas.parentElement.scrollWidth;
+                            console.log('图表滚动到右侧完成');
+                        }
+                    } catch (error) {
+                        console.error('图表滚动失败:', error);
+                    }
+                }
+            }, 200);
+            
+            // 30秒后移除预测数据
+            setTimeout(() => {
+                if (glucoseChart && currentData.datasets) {
+                    console.log('移除预测数据...');
+                    
+                    // 查找预测数据集
+                    const datasetIndex = currentData.datasets.findIndex(dataset => dataset.label === '预测走势');
+                    if (datasetIndex !== -1) {
+                        // 清空预测数据而不是移除数据集
+                        const predictionDataset = currentData.datasets[datasetIndex];
+                        predictionDataset.data = [];
+                        predictionDataset.hidden = true;
+                        console.log('清空预测数据并隐藏数据集');
+                        
+                        // 移除预测时间标签（如果存在）
+                        const beforeLabelsCount = currentData.labels.length;
+                        // 找到原始数据的结束位置
+                        const originalDataEndIndex = currentData.labels.length - predictionLabels.length;
+                        if (originalDataEndIndex > 0) {
+                            currentData.labels.splice(originalDataEndIndex, predictionLabels.length);
+                            console.log(`移除预测标签: ${beforeLabelsCount} -> ${currentData.labels.length}`);
+                        }
+                        
+                        glucoseChart.update();
+                        console.log('预测数据移除完成');
+                    }
+                }
+            }, 30000);
+            
+        } catch (error) {
+            console.error('图表更新失败:', error);
+        }
+    }
+    
+    // 格式化预测时间，确保与原始数据格式一致
+    function formatPredictionTime(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    }
+    
+    // 数据验证函数
+    function validatePredictionData(prediction) {
+        console.log('=== validatePredictionData 开始 ===');
+        console.log('验证预测数据:', prediction);
+        
+        const errors = [];
+        const warnings = [];
+        
+        // 基本结构验证
+        if (!prediction) {
+            errors.push('预测数据为空');
+            return { valid: false, errors, warnings };
+        }
+        
+        // 必需字段验证
+        if (!prediction.predicted_glucose_mmol) {
+            errors.push('缺少预测血糖值');
+        } else if (typeof prediction.predicted_glucose_mmol !== 'number' || isNaN(prediction.predicted_glucose_mmol)) {
+            errors.push('预测血糖值无效');
+        } else if (prediction.predicted_glucose_mmol < 0 || prediction.predicted_glucose_mmol > 40) {
+            warnings.push('预测血糖值超出正常范围');
+        }
+        
+        if (!prediction.confidence_score) {
+            warnings.push('缺少置信度评分');
+        } else if (typeof prediction.confidence_score !== 'number' || prediction.confidence_score < 0 || prediction.confidence_score > 100) {
+            errors.push('置信度评分无效');
+        }
+        
+        // 预测点数据验证
+        if (prediction.prediction_points) {
+            if (!Array.isArray(prediction.prediction_points)) {
+                errors.push('预测点数据格式无效');
+            } else {
+                prediction.prediction_points.forEach((point, index) => {
+                    if (!point.minutes_ahead || !point.predicted_glucose_mmol) {
+                        errors.push(`预测点${index + 1}数据不完整`);
+                    } else if (typeof point.predicted_glucose_mmol !== 'number' || isNaN(point.predicted_glucose_mmol)) {
+                        errors.push(`预测点${index + 1}血糖值无效`);
+                    }
+                });
             }
-        }, 30000);
+        }
+        
+        // 验证结果
+        const isValid = errors.length === 0;
+        console.log('验证结果:', {
+            valid: isValid,
+            errors: errors,
+            warnings: warnings
+        });
+        
+        return {
+            valid: isValid,
+            errors: errors,
+            warnings: warnings
+        };
+    }
+    
+    // 图表状态检查函数
+    function checkChartState() {
+        console.log('=== checkChartState 开始 ===');
+        
+        const state = {
+            chartExists: !!glucoseChart,
+            chartData: null,
+            datasetsCount: 0,
+            labelsCount: 0,
+            predictionDatasetExists: false,
+            chartConfig: null
+        };
+        
+        if (glucoseChart) {
+            try {
+                state.chartData = glucoseChart.data;
+                state.datasetsCount = glucoseChart.data.datasets.length;
+                state.labelsCount = glucoseChart.data.labels.length;
+                state.predictionDatasetExists = glucoseChart.data.datasets.some(dataset => dataset.label === '预测走势');
+                state.chartConfig = glucoseChart.config;
+                
+                console.log('图表状态:', state);
+            } catch (error) {
+                console.error('获取图表状态失败:', error);
+                state.error = error.message;
+            }
+        }
+        
+        return state;
+    }
+    
+    // 安全的图表更新函数
+    function safeChartUpdate(updateFn) {
+        console.log('=== safeChartUpdate 开始 ===');
+        
+        if (!glucoseChart) {
+            console.error('图表不存在，无法安全更新');
+            return false;
+        }
+        
+        const chartState = checkChartState();
+        
+        try {
+            // 执行更新函数
+            const result = updateFn(chartState);
+            
+            // 更新图表
+            glucoseChart.update();
+            console.log('图表安全更新成功');
+            return true;
+            
+        } catch (error) {
+            console.error('图表更新失败:', error);
+            console.error('错误详情:', {
+                message: error.message,
+                stack: error.stack,
+                chartState: chartState
+            });
+            
+            // 尝试恢复图表状态
+            try {
+                if (chartState.chartData) {
+                    glucoseChart.data = chartState.chartData;
+                    glucoseChart.update();
+                    console.log('图表状态恢复成功');
+                }
+            } catch (recoveryError) {
+                console.error('图表状态恢复失败:', recoveryError);
+            }
+            
+            return false;
+        }
     }
     
     // 显示通知消息
@@ -1767,20 +2278,57 @@
     
     // 自动血糖预测 - 页面加载时自动执行
     function loadAutomaticPrediction() {
+        console.log('=== loadAutomaticPrediction 开始 ===');
+        
+        // 显示预测卡片加载状态
+        const predictedGlucoseEl = document.getElementById('predicted-glucose');
+        const confidenceEl = document.getElementById('prediction-confidence');
+        const riskIndicatorEl = document.getElementById('risk-indicator');
+        
+        if (predictedGlucoseEl) {
+            predictedGlucoseEl.textContent = '--';
+            predictedGlucoseEl.className = 'mb-1 text-muted';
+        }
+        if (confidenceEl) {
+            confidenceEl.innerHTML = '<span class="text-muted">预测中...</span>';
+        }
+        if (riskIndicatorEl) {
+            const riskBadge = riskIndicatorEl.querySelector('.badge');
+            if (riskBadge) {
+                riskBadge.textContent = '预测中...';
+                riskBadge.className = 'badge bg-secondary';
+            }
+        }
+        
+        console.log('发送预测请求到 /api/predict');
+        
         fetch('/api/predict')
-            .then(response => response.json())
+            .then(response => {
+                console.log('收到预测响应，状态:', response.status);
+                return response.json();
+            })
             .then(data => {
+                console.log('预测响应数据:', data);
+                
                 if (data.status === 'success') {
+                    console.log('预测成功，更新显示');
+                    
                     // 更新预测显示
                     updatePredictionDisplay(data.prediction, data.risk_assessment);
                     
                     // 如果有高风险或中风险，显示警报
                     if (data.risk_assessment.risk_level !== 'LOW') {
+                        console.log('检测到风险，显示警报:', data.risk_assessment.risk_level);
                         showAlert(data.risk_assessment);
+                    } else {
+                        console.log('风险等级为LOW，不显示警报');
                     }
                 } else {
+                    console.log('预测失败，错误信息:', data.error);
+                    
                     // 数据不足时显示友好的提示
-                    if (data.error.includes('数据不足') || data.error.includes('数据点不足')) {
+                    if (data.error && (data.error.includes('数据不足') || data.error.includes('数据点不足'))) {
+                        console.log('数据不足，显示友好提示');
                         const predictionCard = document.getElementById('prediction-card');
                         if (predictionCard) {
                             const confidenceEl = document.getElementById('prediction-confidence');
@@ -1788,11 +2336,30 @@
                                 confidenceEl.innerHTML = '<span class="text-muted">数据不足，无法预测</span>';
                             }
                         }
+                    } else {
+                        // 其他错误，显示通用错误信息
+                        console.log('显示通用错误信息');
+                        const confidenceEl = document.getElementById('prediction-confidence');
+                        if (confidenceEl) {
+                            confidenceEl.innerHTML = '<span class="text-muted">预测暂时不可用</span>';
+                        }
                     }
                 }
             })
             .catch(error => {
                 console.error('自动预测失败:', error);
+                console.error('错误详情:', {
+                    message: error.message,
+                    stack: error.stack,
+                    type: error.type
+                });
+                
+                // 显示网络错误提示
+                const confidenceEl = document.getElementById('prediction-confidence');
+                if (confidenceEl) {
+                    confidenceEl.innerHTML = '<span class="text-muted">网络连接失败</span>';
+                }
+                
                 // 静默失败，不显示错误信息给用户
             });
     }
