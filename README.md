@@ -4,8 +4,19 @@
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://github.com/flyhunterl/glucose-buddy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/flyhunterl/glucose-buddy/pulls)
+[![Email Fixed](https://img.shields.io/badge/email%20system-fixed-success)](https://github.com/flyhunterl/glucose-buddy)
 
 一个基于 Nightscout 的智能血糖监控系统，提供血糖数据可视化、AI 智能分析、血糖预测、治疗方案管理和风险预警功能。
+
+### 🎉 最新更新 (2025-08-07)
+**📧 邮件系统重大修复完成！**
+- ✅ **修复SMTP连接问题**：彻底解决端口465/587连接错误
+- ✅ **修复邮件发送功能**：解决"连接成功但发送失败"的代码结构问题  
+- ✅ **增强错误诊断**：新增详细配置诊断API端点
+- ✅ **优化用户反馈**：提供详细的状态信息和错误提示
+- ✅ **完善日志记录**：全程记录邮件发送过程，便于问题排查
+
+**邮件通知功能现已完全恢复正常！** 🚀
 <img width="1467" height="1078" alt="glucose monitoring dashboard" src="https://github.com/user-attachments/assets/6c7b38c5-84d2-4952-9a50-2a66aec0f9b2" />
 
 [English](#english) | [中文](#中文)
@@ -41,7 +52,6 @@
 ### 🚨 智能风险预警
 - **实时风险评估**：基于血糖预测结果进行低血糖风险评估
 - **多级预警**：支持高风险、中等风险、低风险三个预警级别
-- **智能阈值**：用户可自定义高风险和中等风险阈值
 - **预警通知**：在页面顶部显示醒目的预警横幅
 - **预警历史**：记录和查看历史预警信息
 - **预警确认**：支持预警确认功能，避免重复提醒
@@ -174,12 +184,57 @@ python app.py
 - **预警开关**：可独立控制预警功能的启用状态
 - **通知方式**：支持浏览器通知和邮件通知
 
-### 邮件配置
-- **SMTP 服务器**：邮件服务器地址（如：`smtp.gmail.com`）
-- **端口**：通常为 587 (TLS) 或 465 (SSL)
-- **认证信息**：邮箱用户名和应用专用密码
+### 邮件配置 ⚡
+- **SMTP 服务器**：邮件服务器地址（如：`smtp.gmail.com`、`smtp.exmail.qq.com`）
+- **端口**：支持 587 (TLS) 或 465 (SSL)，自动检测连接类型
+- **认证信息**：邮箱用户名和应用专用密码（推荐使用专用密码）
 - **收发件人**：发件人和接收通知的邮箱地址
 
+#### 🆕 新增功能
+- **智能端口检测**：自动识别SSL(465)和TLS(587)连接方式
+- **详细诊断API**：`/api/validate-email-config` 提供完整配置诊断
+- **邮箱格式验证**：自动验证发件人和收件人邮箱格式
+- **增强错误处理**：提供详细错误原因和解决建议
+- **完善日志记录**：全程记录SMTP连接、认证、发送过程
+## 使用邮件服务需要在nginx配置WS
+**WS配置参考（外部NGINX反代）**
+```
+     location / {
+          proxy_pass http://127.0.0.1:1338/;
+          rewrite ^/(.*)$ /$1 break;
+          proxy_redirect off;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header Upgrade-Insecure-Requests 1;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_connect_timeout 60s;
+          proxy_send_timeout 60s;
+          proxy_read_timeout 300s;
+
+          # 添加WebSocket支持
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+      }
+
+      # Socket.IO特殊处理
+      location /socket.io/ {
+          proxy_pass http://127.0.0.1:1338;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_connect_timeout 60s;
+          proxy_send_timeout 60s;
+          proxy_read_timeout 300s;
+      }
+
+```
 ### 定时任务配置
 - **同步间隔**：自动同步数据的间隔时间（分钟）
 - **分析时间**：每日自动分析的时间点
@@ -331,6 +386,7 @@ python app.py
 | `/api/config` | GET/POST | 获取/更新应用配置 |
 | `/api/test-connection` | POST | 测试 Nightscout 连接 |
 | `/api/test-email` | POST | 测试邮件配置 |
+| `/api/validate-email-config` | POST | 🆕 邮件配置详细诊断和验证 |
 
 #### 预警管理接口
 | 接口 | 方法 | 说明 |
@@ -399,6 +455,22 @@ python app.py
    - 验证 SMTP 服务器连接是否正常
    - 确认收件人邮箱地址正确
    - 检查浏览器通知权限是否已授权
+
+#### 📧 邮件系统专门修复 (最新)
+**已修复的问题：**
+- ✅ **SMTP连接断开**：端口465现在正确使用SMTP_SSL连接
+- ✅ **登录成功但发送失败**：修复代码结构问题，确保连接保持活动状态
+- ✅ **配置格式错误**：TOML配置文件格式已优化
+- ✅ **错误信息不明确**：提供详细的错误诊断和解决建议
+
+**如果仍有邮件问题：**
+1. **使用诊断功能**：访问配置页面，使用邮件测试功能获取详细诊断
+2. **检查密码**：确认使用的是应用专用密码而非登录密码（特别是Gmail和腾讯企业邮箱）
+3. **查看日志**：检查应用日志中的详细邮件发送过程信息
+4. **端口确认**：
+   - 端口465：SSL连接（适用于大部分现代邮件服务器）
+   - 端口587：TLS连接（传统方式）
+5. **新增API测试**：使用 `/api/validate-email-config` 接口获得详细配置分析
 
 #### 系统运行问题
 9. **应用启动失败**
