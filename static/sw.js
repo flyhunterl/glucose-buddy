@@ -3,8 +3,8 @@ const CACHE_NAME = 'tangxiaozhu-web-v1';
 const urlsToCache = [
     '/',
     '/static/manifest.json',
-    '/static/icon-192.png',
-    '/static/icon-512.png'
+    '/static/icon.png',
+    '/static/icon.png'
 ];
 
 // Install event

@@ -7,8 +7,10 @@
 import asyncio
 import json
 import os
+import socket
 import sqlite3
 import time
+import re
 try:
     import tomllib
 except ImportError:
@@ -1753,8 +1755,11 @@ class NightscoutWebMonitor:
 
     def send_email_notification(self, subject: str, content: str, is_html: bool = False):
         """发送邮件通知"""
+        start_time = time.time()
+        
         try:
             if not self.config.get("notification", {}).get("enable_email", False):
+                logger.info("邮件通知已禁用，跳过发送")
                 return False
 
             email_config = self.config.get("email", {})
@@ -1768,10 +1773,36 @@ class NightscoutWebMonitor:
                 logger.warning("邮件配置不完整，跳过邮件发送")
                 return False
 
+            # 验证邮箱格式
+            from_email = email_config["from_email"]
+            if not self.validate_email_format(from_email):
+                logger.error(f"发件人邮箱格式不正确: {from_email}")
+                return False
+
+            to_emails = email_config["to_emails"]
+            if isinstance(to_emails, list):
+                for email in to_emails:
+                    if isinstance(email, str):
+                        email_clean = email.strip('"\'')
+                        if not self.validate_email_format(email_clean):
+                            logger.error(f"收件人邮箱格式不正确: {email_clean}")
+                            return False
+                    else:
+                        logger.error(f"收件人邮箱格式错误: {email}")
+                        return False
+            else:
+                logger.error("收件人邮箱配置格式错误")
+                return False
+
+            logger.info(f"开始发送邮件: {subject} 到 {len(to_emails)} 个收件人")
+
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = email_config["from_email"]
-            msg['To'] = ", ".join(email_config["to_emails"])
+            
+            # 清理收件人邮箱地址（去除引号）
+            cleaned_to_emails = [e.strip('"\'') if isinstance(e, str) else str(e) for e in to_emails]
+            msg['To'] = ", ".join(cleaned_to_emails)
             msg['Date'] = formatdate(localtime=True)
 
             if is_html:
@@ -1791,22 +1822,125 @@ class NightscoutWebMonitor:
             msg.attach(text_part)
             msg.attach(html_part)
 
-            # 发送邮件
-            with smtplib.SMTP(email_config["smtp_server"], email_config.get("smtp_port", 587)) as server:
-                server.starttls()
-                server.login(email_config["smtp_username"], email_config["smtp_password"])
-                server.send_message(msg)
+            try:
+                # 发送邮件
+                smtp_server = email_config["smtp_server"]
+                smtp_port = email_config.get("smtp_port", 587)
+                smtp_username = email_config["smtp_username"]
+                smtp_password = email_config["smtp_password"]
+                
+                logger.info(f"连接SMTP服务器: {smtp_server}:{smtp_port}")
+                logger.info(f"使用端口 {smtp_port}，判断连接类型：{'SMTP_SSL' if smtp_port == 465 else 'SMTP + STARTTLS'}")
+                
+                # 根据端口选择连接方式
+                if smtp_port == 465:
+                    # 端口465使用SSL连接
+                    logger.info("使用SMTP_SSL连接（端口465）")
+                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                        logger.info("SMTP_SSL连接成功，准备登录...")
+                        server.login(smtp_username, smtp_password)
+                        logger.info("登录成功，准备发送邮件...")
+                        server.send_message(msg)
+                        logger.info("邮件发送成功")
+                else:
+                    # 其他端口（如587）使用普通连接+STARTTLS
+                    logger.info("使用SMTP + STARTTLS连接")
+                    with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                        logger.info("SMTP连接成功，准备启用STARTTLS...")
+                        server.starttls()
+                        logger.info("STARTTLS启用成功，准备登录...")
+                        server.login(smtp_username, smtp_password)
+                        logger.info("登录成功，准备发送邮件...")
+                        server.send_message(msg)
+                        logger.info("邮件发送成功")
+                
+                elapsed_time = time.time() - start_time
+                logger.info(f"邮件发送成功: {subject} (耗时: {elapsed_time:.2f}秒)")
+                return True
+                
+            finally:
+                pass
 
-            logger.info(f"邮件发送成功: {subject}")
-            return True
-
+        except smtplib.SMTPAuthenticationError as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== SMTP认证失败 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"用户名: {smtp_username}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 用户名或密码错误，或者需要使用应用专用密码")
+        except smtplib.SMTPConnectError as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== SMTP连接失败 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 服务器地址错误、端口错误、网络问题或防火墙阻止")
+        except smtplib.SMTPServerDisconnected as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== SMTP服务器连接断开 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 服务器主动断开连接，可能是因为认证失败或协议错误")
+        except smtplib.SMTPHeloError as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== SMTP HELO/EHLO命令失败 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 服务器不支持HELO/EHLO命令或协议不兼容")
+        except smtplib.SMTPRecipientsRefused as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 收件人地址被拒绝 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"收件人: {cleaned_to_emails}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 收件人邮箱地址不存在或被服务器拒绝")
+        except smtplib.SMTPSenderRefused as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 发件人地址被拒绝 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"发件人: {from_email}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 发件人邮箱地址未验证或被服务器拒绝")
+        except smtplib.SMTPDataError as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 邮件数据格式错误 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 邮件内容格式不正确或包含被拒绝的内容")
+        except socket.timeout as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 邮件发送超时 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 网络延迟或服务器响应慢")
+        except ConnectionRefusedError as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 连接被拒绝 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            logger.error(f"可能原因: 服务器未运行、端口未开放或被防火墙阻止")
         except Exception as e:
-            logger.error(f"邮件发送失败: {e}")
-            return False
+            elapsed_time = time.time() - start_time
+            logger.error(f"=== 邮件发送失败 ===")
+            logger.error(f"错误详情: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.error(f"服务器: {smtp_server}:{smtp_port}")
+            logger.error(f"耗时: {elapsed_time:.2f}秒")
+            import traceback
+            logger.error(f"详细错误堆栈:\n{traceback.format_exc()}")
+        
+        return False
 
     def create_email_html_template(self, subject: str, content: str) -> str:
         """创建邮件HTML模板"""
         from datetime import datetime
+        # 预格式化时间字符串，避免f-string中的方法调用
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # 将纯文本内容转换为HTML格式
         html_content = content.replace('\n', '<br>')
@@ -1885,7 +2019,7 @@ class NightscoutWebMonitor:
                     <p style="margin: 0; color: #6c757d;">{subject}</p>
                 </div>
                 <div class="timestamp">
-                    生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    生成时间: {current_time}
                 </div>
                 <div class="content">
                     {html_content}
@@ -1898,6 +2032,18 @@ class NightscoutWebMonitor:
         </body>
         </html>
         """
+
+    def validate_email_format(self, email: str) -> bool:
+        """验证邮箱格式"""
+        if not email or not isinstance(email, str):
+            return False
+        
+        # 去除可能的引号
+        email = email.strip('"\'')
+        
+        # 基本的邮箱格式验证
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return re.match(pattern, email) is not None
 
     def test_email_configuration(self) -> Dict[str, any]:
         """测试邮件配置"""
@@ -1914,37 +2060,138 @@ class NightscoutWebMonitor:
                     "error": f"缺少必要配置: {', '.join(missing_fields)}"
                 }
 
-            # 测试SMTP连接
-            with smtplib.SMTP(email_config["smtp_server"], email_config.get("smtp_port", 587)) as server:
-                server.starttls()
-                server.login(email_config["smtp_username"], email_config["smtp_password"])
+            # 验证邮箱格式
+            from_email = email_config["from_email"]
+            if not self.validate_email_format(from_email):
+                return {
+                    "success": False,
+                    "error": "发件人邮箱格式不正确"
+                }
 
-                # 发送测试邮件
-                test_subject = "糖小助 - 邮件配置测试"
-                test_content = f"""
+            to_emails = email_config["to_emails"]
+            if isinstance(to_emails, list):
+                invalid_emails = []
+                for email in to_emails:
+                    if isinstance(email, str):
+                        # 去除引号后验证
+                        email_clean = email.strip('"\'')
+                        if not self.validate_email_format(email_clean):
+                            invalid_emails.append(email_clean)
+                    else:
+                        invalid_emails.append(str(email))
+                
+                if invalid_emails:
+                    return {
+                        "success": False,
+                        "error": f"收件人邮箱格式不正确: {', '.join(invalid_emails)}"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": "收件人邮箱配置格式错误"
+                }
+
+            # 测试SMTP连接
+            try:
+                smtp_server = email_config["smtp_server"]
+                smtp_port = email_config.get("smtp_port", 587)
+                smtp_username = email_config["smtp_username"]
+                smtp_password = email_config["smtp_password"]
+                
+                logger.info(f"测试SMTP连接: {smtp_server}:{smtp_port}")
+                logger.info(f"使用端口 {smtp_port}，判断连接类型：{'SMTP_SSL' if smtp_port == 465 else 'SMTP + STARTTLS'}")
+                
+                # 根据端口选择连接方式
+                if smtp_port == 465:
+                    # 端口465使用SSL连接
+                    logger.info("测试：使用SMTP_SSL连接（端口465）")
+                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                        logger.info("测试：SMTP_SSL连接成功，准备登录...")
+                        server.login(smtp_username, smtp_password)
+                        logger.info("测试：登录成功")
+                        
+                        # 发送测试邮件
+                        test_subject = "糖小助 - 邮件配置测试"
+                        test_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        # 清理收件人邮箱地址，避免f-string中的转义字符
+                        clean_to_emails = [e.strip('"\'') for e in email_config['to_emails']]
+                        test_content = f"""
 这是一封测试邮件，用于验证您的邮件配置是否正确。
 
 📧 SMTP 服务器: {email_config['smtp_server']}:{email_config.get('smtp_port', 587)}
 👤 发件人: {email_config['from_email']}
-📮 收件人: {', '.join(email_config['to_emails'])}
+📮 收件人: {', '.join(clean_to_emails)}
 
 如果您收到这封邮件，说明邮件配置已经成功！
 
-测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                """
-
-                success = self.send_email_notification(test_subject, test_content)
-
-                if success:
-                    return {
-                        "success": True,
-                        "message": "邮件配置测试成功！测试邮件已发送"
-                    }
+测试时间: {test_time}
+                        """
+                        
+                        # 创建邮件消息
+                        msg = MIMEMultipart()
+                        msg['From'] = email_config['from_email']
+                        msg['To'] = ', '.join(clean_to_emails)
+                        msg['Subject'] = test_subject
+                        
+                        # 添加邮件内容
+                        msg.attach(MIMEText(test_content, 'plain', 'utf-8'))
+                        
+                        # 发送邮件
+                        logger.info("测试：准备发送邮件...")
+                        server.send_message(msg)
+                        logger.info("测试：邮件发送成功")
+                        
+                        return {
+                            "success": True,
+                            "message": "邮件配置测试成功！测试邮件已发送"
+                        }
                 else:
-                    return {
-                        "success": False,
-                        "error": "邮件发送失败，请检查配置"
-                    }
+                    # 其他端口（如587）使用普通连接+STARTTLS
+                    logger.info("测试：使用SMTP + STARTTLS连接")
+                    with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                        logger.info("测试：SMTP连接成功，准备启用STARTTLS...")
+                        server.starttls()
+                        logger.info("测试：STARTTLS启用成功，准备登录...")
+                        server.login(smtp_username, smtp_password)
+                        logger.info("测试：登录成功")
+                        
+                        # 发送测试邮件
+                        test_subject = "糖小助 - 邮件配置测试"
+                        test_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        # 清理收件人邮箱地址，避免f-string中的转义字符
+                        clean_to_emails = [e.strip('"\'') for e in email_config['to_emails']]
+                        test_content = f"""
+这是一封测试邮件，用于验证您的邮件配置是否正确。
+
+📧 SMTP 服务器: {email_config['smtp_server']}:{email_config.get('smtp_port', 587)}
+👤 发件人: {email_config['from_email']}
+📮 收件人: {', '.join(clean_to_emails)}
+
+如果您收到这封邮件，说明邮件配置已经成功！
+
+测试时间: {test_time}
+                        """
+                        
+                        # 创建邮件消息
+                        msg = MIMEMultipart()
+                        msg['From'] = email_config['from_email']
+                        msg['To'] = ', '.join(clean_to_emails)
+                        msg['Subject'] = test_subject
+                        
+                        # 添加邮件内容
+                        msg.attach(MIMEText(test_content, 'plain', 'utf-8'))
+                        
+                        # 发送邮件
+                        logger.info("测试：准备发送邮件...")
+                        server.send_message(msg)
+                        logger.info("测试：邮件发送成功")
+                        
+                        return {
+                            "success": True,
+                            "message": "邮件配置测试成功！测试邮件已发送"
+                        }
+            finally:
+                pass
 
         except smtplib.SMTPAuthenticationError:
             return {
@@ -1955,6 +2202,41 @@ class NightscoutWebMonitor:
             return {
                 "success": False,
                 "error": "无法连接到SMTP服务器，请检查服务器地址和端口"
+            }
+        except smtplib.SMTPServerDisconnected:
+            return {
+                "success": False,
+                "error": "SMTP服务器连接断开，请检查网络连接"
+            }
+        except smtplib.SMTPHeloError:
+            return {
+                "success": False,
+                "error": "SMTP服务器不支持HELO/EHLO命令"
+            }
+        except smtplib.SMTPRecipientsRefused:
+            return {
+                "success": False,
+                "error": "收件人地址被邮件服务器拒绝"
+            }
+        except smtplib.SMTPSenderRefused:
+            return {
+                "success": False,
+                "error": "发件人地址被邮件服务器拒绝"
+            }
+        except smtplib.SMTPDataError:
+            return {
+                "success": False,
+                "error": "邮件数据格式错误或被服务器拒绝"
+            }
+        except socket.timeout:
+            return {
+                "success": False,
+                "error": "连接超时，请检查网络连接和邮件服务器状态"
+            }
+        except ConnectionRefusedError:
+            return {
+                "success": False,
+                "error": "连接被拒绝，请检查SMTP服务器地址和端口"
             }
         except Exception as e:
             return {
@@ -3180,6 +3462,241 @@ def api_test_email():
         return jsonify({
             "success": False,
             "error": f"测试失败: {str(e)}"
+        })
+
+@app.route('/api/validate-email-config', methods=['POST'])
+def api_validate_email_config():
+    """邮件配置详细验证和诊断"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "请提供邮件配置数据"
+            })
+
+        email_config = data.get('email', {})
+        diagnosis = {
+            "success": False,
+            "diagnosis": {},
+            "recommendations": [],
+            "configuration_details": {}
+        }
+
+        # 1. 配置完整性检查
+        required_fields = ["smtp_server", "smtp_username", "smtp_password", "from_email", "to_emails"]
+        missing_fields = [field for field in required_fields if not email_config.get(field)]
+        
+        if missing_fields:
+            diagnosis["diagnosis"]["config_completeness"] = {
+                "status": "failed",
+                "message": f"缺少必要配置: {', '.join(missing_fields)}"
+            }
+            diagnosis["recommendations"].append(f"请补充缺失的配置项: {', '.join(missing_fields)}")
+            return jsonify(diagnosis)
+
+        diagnosis["diagnosis"]["config_completeness"] = {
+            "status": "passed",
+            "message": "配置完整性检查通过"
+        }
+
+        # 2. 配置详情记录
+        diagnosis["configuration_details"] = {
+            "smtp_server": email_config["smtp_server"],
+            "smtp_port": email_config.get("smtp_port", 587),
+            "smtp_username": email_config["smtp_username"],
+            "from_email": email_config["from_email"],
+            "to_emails": email_config["to_emails"],
+            "port_type": "SSL (465)" if email_config.get("smtp_port", 587) == 465 else "STARTTLS (587)"
+        }
+
+        # 3. 邮箱格式验证
+        from_email = email_config["from_email"]
+        if not monitor.validate_email_format(from_email):
+            diagnosis["diagnosis"]["email_format"] = {
+                "status": "failed",
+                "message": "发件人邮箱格式不正确"
+            }
+            diagnosis["recommendations"].append("请检查发件人邮箱格式")
+            return jsonify(diagnosis)
+
+        to_emails = email_config["to_emails"]
+        if isinstance(to_emails, list):
+            invalid_emails = []
+            for email in to_emails:
+                if isinstance(email, str):
+                    email_clean = email.strip('"\'')
+                    if not monitor.validate_email_format(email_clean):
+                        invalid_emails.append(email_clean)
+                else:
+                    invalid_emails.append(str(email))
+            
+            if invalid_emails:
+                diagnosis["diagnosis"]["email_format"] = {
+                    "status": "failed",
+                    "message": f"收件人邮箱格式不正确: {', '.join(invalid_emails)}"
+                }
+                diagnosis["recommendations"].append(f"请检查收件人邮箱格式: {', '.join(invalid_emails)}")
+                return jsonify(diagnosis)
+        else:
+            diagnosis["diagnosis"]["email_format"] = {
+                "status": "failed",
+                "message": "收件人邮箱配置格式错误"
+            }
+            diagnosis["recommendations"].append("收件人邮箱应为列表格式")
+            return jsonify(diagnosis)
+
+        diagnosis["diagnosis"]["email_format"] = {
+            "status": "passed",
+            "message": "邮箱格式检查通过"
+        }
+
+        # 4. SMTP连接诊断
+        try:
+            smtp_server = email_config["smtp_server"]
+            smtp_port = email_config.get("smtp_port", 587)
+            smtp_username = email_config["smtp_username"]
+            smtp_password = email_config["smtp_password"]
+            
+            logger.info(f"邮件配置诊断: 开始SMTP连接测试 {smtp_server}:{smtp_port}")
+            
+            # 根据端口选择连接方式
+            if smtp_port == 465:
+                logger.info("诊断: 尝试SMTP_SSL连接")
+                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                    logger.info("诊断: SMTP_SSL连接成功")
+                    server.login(smtp_username, smtp_password)
+                    logger.info("诊断: SMTP_SSL登录成功")
+                    
+                    # 发送测试邮件
+                    test_subject = "糖小助 - 邮件配置诊断测试"
+                    test_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    clean_to_emails = [e.strip('"\'') for e in email_config['to_emails']]
+                    test_content = f"""
+这是一封诊断测试邮件，用于验证您的邮件配置是否正确。
+
+📧 SMTP 服务器: {smtp_server}:{smtp_port}
+🔐 连接类型: {'SSL' if smtp_port == 465 else 'STARTTLS'}
+👤 发件人: {smtp_username}
+📮 收件人: {', '.join(clean_to_emails)}
+
+诊断测试时间: {test_time}
+
+如果您收到这封邮件，说明邮件配置完全正常！
+                    """
+                    
+                    # 创建邮件消息
+                    msg = MIMEMultipart()
+                    msg['From'] = email_config['from_email']
+                    msg['To'] = ', '.join(clean_to_emails)
+                    msg['Subject'] = test_subject
+                    
+                    # 添加邮件内容
+                    msg.attach(MIMEText(test_content, 'plain', 'utf-8'))
+                    
+                    # 发送邮件
+                    logger.info("诊断: 准备发送测试邮件...")
+                    server.send_message(msg)
+                    logger.info("诊断: 测试邮件发送成功")
+                    
+                    success = True
+            else:
+                logger.info("诊断: 尝试SMTP + STARTTLS连接")
+                with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                    logger.info("诊断: SMTP连接成功")
+                    server.starttls()
+                    logger.info("诊断: STARTTLS启用成功")
+                    server.login(smtp_username, smtp_password)
+                    logger.info("诊断: SMTP登录成功")
+                    
+                    # 发送测试邮件
+                    test_subject = "糖小助 - 邮件配置诊断测试"
+                    test_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    clean_to_emails = [e.strip('"\'') for e in email_config['to_emails']]
+                    test_content = f"""
+这是一封诊断测试邮件，用于验证您的邮件配置是否正确。
+
+📧 SMTP 服务器: {smtp_server}:{smtp_port}
+🔐 连接类型: {'SSL' if smtp_port == 465 else 'STARTTLS'}
+👤 发件人: {smtp_username}
+📮 收件人: {', '.join(clean_to_emails)}
+
+诊断测试时间: {test_time}
+
+如果您收到这封邮件，说明邮件配置完全正常！
+                    """
+                    
+                    # 创建邮件消息
+                    msg = MIMEMultipart()
+                    msg['From'] = email_config['from_email']
+                    msg['To'] = ', '.join(clean_to_emails)
+                    msg['Subject'] = test_subject
+                    
+                    # 添加邮件内容
+                    msg.attach(MIMEText(test_content, 'plain', 'utf-8'))
+                    
+                    # 发送邮件
+                    logger.info("诊断: 准备发送测试邮件...")
+                    server.send_message(msg)
+                    logger.info("诊断: 测试邮件发送成功")
+                    
+                    success = True
+
+            diagnosis["diagnosis"]["smtp_connection"] = {
+                "status": "passed",
+                "message": f"SMTP连接测试成功 ({smtp_server}:{smtp_port})"
+            }
+
+            # 5. 端口建议
+            if smtp_port == 465:
+                diagnosis["recommendations"].append("端口465使用SSL连接，配置正确")
+            elif smtp_port == 587:
+                diagnosis["recommendations"].append("端口587使用STARTTLS连接，配置正确")
+            else:
+                diagnosis["recommendations"].append(f"端口{smtp_port}非常见端口，请确认服务器支持")
+
+            if success:
+                diagnosis["diagnosis"]["email_delivery"] = {
+                    "status": "passed",
+                    "message": "测试邮件发送成功"
+                }
+                diagnosis["success"] = True
+                diagnosis["recommendations"].append("🎉 邮件配置完全正常，可以正常使用！")
+            else:
+                diagnosis["diagnosis"]["email_delivery"] = {
+                    "status": "failed",
+                    "message": "测试邮件发送失败"
+                }
+                diagnosis["recommendations"].append("SMTP连接成功但邮件发送失败，请检查邮件内容或收件人设置")
+
+        except smtplib.SMTPAuthenticationError:
+            diagnosis["diagnosis"]["smtp_connection"] = {
+                "status": "failed",
+                "message": "SMTP认证失败"
+            }
+            diagnosis["recommendations"].append("用户名或密码错误，请检查凭据")
+            diagnosis["recommendations"].append("部分邮件服务需要使用应用专用密码，而非登录密码")
+        except smtplib.SMTPConnectError:
+            diagnosis["diagnosis"]["smtp_connection"] = {
+                "status": "failed",
+                "message": "无法连接到SMTP服务器"
+            }
+            diagnosis["recommendations"].append("请检查服务器地址和端口是否正确")
+            diagnosis["recommendations"].append("检查网络连接和防火墙设置")
+        except Exception as e:
+            diagnosis["diagnosis"]["smtp_connection"] = {
+                "status": "failed",
+                "message": f"连接测试失败: {str(e)}"
+            }
+            diagnosis["recommendations"].append(f"未知错误: {str(e)}")
+
+        return jsonify(diagnosis)
+
+    except Exception as e:
+        logger.error(f"邮件配置诊断失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"诊断失败: {str(e)}"
         })
 
 @app.route('/api/test-ai', methods=['POST'])
