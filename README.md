@@ -233,8 +233,8 @@ python app.py
           proxy_send_timeout 60s;
           proxy_read_timeout 300s;
       }
-
 ```
+
 ### 定时任务配置
 - **同步间隔**：自动同步数据的间隔时间（分钟）
 - **分析时间**：每日自动分析的时间点
