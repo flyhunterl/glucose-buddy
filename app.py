@@ -3182,6 +3182,136 @@ def api_test_email():
             "error": f"测试失败: {str(e)}"
         })
 
+@app.route('/api/test-ai', methods=['POST'])
+def api_test_ai():
+    """测试AI连接配置"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "请求参数缺失"
+            })
+        
+        api_url = data.get('api_url', '').strip()
+        api_key = data.get('api_key', '').strip()
+        model_name = data.get('model_name', '').strip()
+        timeout = data.get('timeout', 30)
+        
+        if not api_url:
+            return jsonify({
+                "success": False,
+                "error": "API 地址不能为空"
+            })
+        
+        if not model_name:
+            return jsonify({
+                "success": False,
+                "error": "模型名称不能为空"
+            })
+        
+        # 创建测试请求数据
+        request_data = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "请回复'连接测试成功'来验证AI服务正常工作。"
+                }
+            ],
+            "max_tokens": 50,
+            "temperature": 0.7
+        }
+        
+        # 设置请求头
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        
+        # 测试连接
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(
+                test_ai_connection_async(api_url, headers, request_data, timeout)
+            )
+            return jsonify(result)
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"测试失败: {str(e)}"
+        })
+
+async def test_ai_connection_async(api_url: str, headers: dict, request_data: dict, timeout: int) -> dict:
+    """异步测试AI连接"""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+            async with session.post(api_url, json=request_data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    
+                    # 验证响应格式
+                    if 'choices' in result and len(result['choices']) > 0:
+                        choice = result['choices'][0]
+                        if 'message' in choice and 'content' in choice['message']:
+                            ai_response = choice['message']['content'].strip()
+                            
+                            # 验证AI响应内容
+                            if ai_response:
+                                return {
+                                    "success": True,
+                                    "message": f"AI连接正常，模型响应: {ai_response[:50]}{'...' if len(ai_response) > 50 else ''}"
+                                }
+                            else:
+                                return {
+                                    "success": False,
+                                    "error": "AI响应内容为空"
+                                }
+                        else:
+                            return {
+                                "success": False,
+                                "error": "AI响应格式错误，缺少message或content字段"
+                            }
+                    else:
+                        return {
+                            "success": False,
+                            "error": "AI响应格式错误，缺少choices字段"
+                        }
+                else:
+                    error_text = await response.text()
+                    return {
+                        "success": False,
+                        "error": f"HTTP {response.status}: {error_text[:200]}"
+                    }
+                    
+    except asyncio.TimeoutError:
+        return {
+            "success": False,
+            "error": f"连接超时（{timeout}秒），请检查网络或增加超时时间"
+        }
+    except aiohttp.ClientError as e:
+        return {
+            "success": False,
+            "error": f"网络连接错误: {str(e)}"
+        }
+    except json.JSONDecodeError as e:
+        return {
+            "success": False,
+            "error": f"JSON解析错误: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"未知错误: {str(e)}"
+        }
+
 def get_glucose_color_class(value):
     if value is None:
         return ''

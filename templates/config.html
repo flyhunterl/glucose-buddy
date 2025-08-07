@@ -254,6 +254,18 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="row">
+                                <div class="col-12">
+                                    <div class="mb-3">
+                                        <button type="button" class="btn btn-info" onclick="testAIConnection()">
+                                            <i class="fas fa-brain"></i> 测试 AI 连接
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle"></i> 暂不支持思维模型
+                            </div>
                         </div>
                     </div>
 
@@ -639,6 +651,63 @@
         })
         .catch(error => {
             showNotification('测试失败: ' + error.message, 'danger');
+        })
+        .finally(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        });
+    }
+    
+    // 测试 AI 连接
+    function testAIConnection() {
+        const btn = event.target;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中...';
+        btn.disabled = true;
+        
+        // 获取当前配置的 AI 参数
+        const apiUrl = document.getElementById('ai-api-url').value.trim();
+        const apiKey = document.getElementById('ai-api-key').value.trim();
+        const modelName = document.getElementById('ai-model').value.trim();
+        const timeout = parseInt(document.getElementById('ai-timeout').value) || 30;
+        
+        if (!apiUrl) {
+            showNotification('请先填写 AI API 地址', 'danger');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            return;
+        }
+        
+        if (!modelName) {
+            showNotification('请先填写模型名称', 'danger');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            return;
+        }
+        
+        // 发送测试请求
+        fetch('/api/test-ai', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                api_url: apiUrl,
+                api_key: apiKey,
+                model_name: modelName,
+                timeout: timeout
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('AI 连接测试成功: ' + data.message, 'success');
+            } else {
+                showNotification('AI 连接测试失败: ' + data.error, 'danger');
+            }
+        })
+        .catch(error => {
+            showNotification('AI 连接测试失败: ' + error.message, 'danger');
         })
         .finally(() => {
             btn.innerHTML = originalText;
