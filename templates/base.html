@@ -25,7 +25,9 @@
     <!-- Font Awesome -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <!-- Chart.js Zoom Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
     
@@ -76,6 +78,289 @@
         .mobile-glucose-row.high { border-left-color: #dc3545; }
         .mobile-glucose-row.normal { border-left-color: #198754; }
         .mobile-glucose-row.low { border-left-color: #fd7e14; }
+
+        /* 图表触摸优化 */
+        .chart-container {
+            touch-action: pan-y;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        .chart-container canvas {
+            touch-action: pan-y pinch-zoom;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        /* 移动端表格点击优化 */
+        @media (max-width: 768px) {
+            .table-responsive {
+                -webkit-overflow-scrolling: touch;
+                touch-action: pan-y;
+            }
+            
+            .table td {
+                touch-action: manipulation;
+                -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+            }
+            
+            /* 图表容器触摸优化 */
+            .chart-container {
+                touch-action: none;
+                cursor: grab;
+            }
+            
+            .chart-container.zooming {
+                cursor: grabbing;
+            }
+            
+            /* 表格行选择优化 */
+            .table tbody tr {
+                cursor: pointer;
+                transition: background-color 0.2s ease;
+                -webkit-tap-highlight-color: rgba(0, 123, 255, 0.3);
+            }
+            
+            .table tbody tr:hover {
+                background-color: rgba(0, 123, 255, 0.075);
+            }
+            
+            .table tbody tr.selected {
+                background-color: rgba(0, 123, 255, 0.15);
+                border-left: 3px solid #007bff;
+            }
+            
+            .table tbody tr:active {
+                background-color: rgba(0, 123, 255, 0.2);
+                transform: scale(0.995);
+            }
+        }
+        
+        /* 桌面端表格选择优化 */
+        @media (min-width: 769px) {
+            .table tbody tr {
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+            
+            .table tbody tr:hover {
+                background-color: rgba(0, 123, 255, 0.075);
+                transform: translateX(2px);
+            }
+            
+            .table tbody tr.selected {
+                background-color: rgba(0, 123, 255, 0.15);
+                border-left: 4px solid #007bff;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }
+            
+            .table tbody tr:active {
+                background-color: rgba(0, 123, 255, 0.2);
+                transform: translateX(1px) scale(0.998);
+            }
+        }
+        
+        /* 平板端优化 */
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .chart-container {
+                touch-action: pan-y pinch-zoom;
+            }
+        }
+        
+        /* PC桌面端优化 */
+        @media (min-width: 1025px) {
+            /* 表格GPU加速 */
+            .table-responsive {
+                transform: translateZ(0);
+                will-change: transform;
+                backface-visibility: hidden;
+                perspective: 1000px;
+            }
+            
+            .table tbody tr {
+                transform: translateZ(0);
+                will-change: background-color, transform;
+                backface-visibility: hidden;
+                transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+            
+            .table tbody tr:hover {
+                background-color: rgba(0, 123, 255, 0.08);
+                transform: translateX(3px);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            }
+            
+            .table tbody tr.selected {
+                background-color: rgba(0, 123, 255, 0.12);
+                border-left: 4px solid #007bff;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                transform: translateX(2px);
+            }
+            
+            /* 表格加载指示器GPU加速 */
+            .table-loading {
+                transform: translateZ(0);
+                will-change: opacity;
+                backface-visibility: hidden;
+                animation: tableLoadingPulse 1.5s ease-in-out infinite;
+            }
+            
+            @keyframes tableLoadingPulse {
+                0%, 100% { opacity: 0.6; }
+                50% { opacity: 1; }
+            }
+            
+            /* 图表拖拽优化 */
+            .chart-container {
+                cursor: grab;
+                transform: translateZ(0);
+                will-change: transform;
+                backface-visibility: hidden;
+            }
+            
+            .chart-container.panning {
+                cursor: grabbing;
+                transform: translateZ(0);
+                will-change: transform;
+            }
+            
+            .chart-container canvas {
+                transform: translateZ(0);
+                will-change: transform;
+                backface-visibility: hidden;
+            }
+            
+            /* 平滑过渡 */
+            .chart-container * {
+                transition: transform 0.1s ease-out;
+            }
+        }
+        
+        /* 通用GPU加速类 */
+        .gpu-accelerated {
+            transform: translateZ(0);
+            will-change: transform;
+            backface-visibility: hidden;
+            perspective: 1000px;
+        }
+        
+        .smooth-transition {
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .desktop-hover-effect {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .desktop-hover-effect:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        /* 表格行增强 */
+        .table-row-enhanced {
+            transform: translateZ(0);
+            will-change: background-color, transform, box-shadow;
+            backface-visibility: hidden;
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .table-row-enhanced:hover {
+            background-color: rgba(0, 123, 255, 0.08);
+            transform: translateX(3px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .table-row-enhanced.selected {
+            background-color: rgba(0, 123, 255, 0.12);
+            border-left: 4px solid #007bff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transform: translateX(2px);
+        }
+        
+        /* 图表锚点拖动样式 */
+        .chart-anchor-point {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #007bff;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0, 123, 255, 0.4);
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        .chart-anchor-point.active {
+            width: 16px;
+            height: 16px;
+            box-shadow: 0 0 0 4px rgba(0, 123, 255, 0.3);
+            animation: anchorPulse 1.5s infinite;
+        }
+
+        @keyframes anchorPulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(0, 123, 255, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(0, 123, 255, 0);
+            }
+        }
+
+        /* 图表触摸反馈样式 */
+        .chart-container.touch-active {
+            background: rgba(0, 123, 255, 0.05);
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .chart-container.touch-pressing {
+            background: rgba(0, 123, 255, 0.1);
+            box-shadow: inset 0 0 20px rgba(0, 123, 255, 0.1);
+        }
+
+        .chart-container canvas.touch-active {
+            opacity: 0.95;
+            transform: scale(0.998);
+        }
+
+        /* 移动端触摸优化增强 */
+        @media (max-width: 768px) {
+            .chart-container {
+                position: relative;
+            }
+            
+            .chart-container::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                border-radius: 8px;
+                background: transparent;
+                transition: all 0.2s ease;
+                pointer-events: none;
+                z-index: 1;
+            }
+            
+            .chart-container.touch-active::before {
+                background: rgba(0, 123, 255, 0.08);
+                border: 2px solid rgba(0, 123, 255, 0.2);
+            }
+            
+            .chart-container.touch-pressing::before {
+                background: rgba(0, 123, 255, 0.15);
+                border: 2px solid rgba(0, 123, 255, 0.4);
+            }
+        }
     </style>
     
     {% block extra_head %}{% endblock %}

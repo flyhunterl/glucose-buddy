@@ -43,7 +43,7 @@
                             <button class="btn btn-warning btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.8rem;" onclick="manualPrediction()">
                                 <i class="fas fa-chart-line"></i> <span class="d-none d-sm-inline">重新预测</span>
                             </button>
-                        </div>
+                                                    </div>
                     </div>
                 </div>
             </div>
@@ -417,6 +417,9 @@
         // 先同步数据，然后加载显示
         syncDataAndLoadToday();
         
+        // 初始化表格选择功能
+        setupTableSelection();
+        
         // 更新未读消息数量
         updateUnreadCountIndicator();
     });
@@ -624,40 +627,164 @@
             });
     }
     
-    // 更新血糖表格
-    function updateGlucoseTable(data) {
-        const tbody = document.getElementById('glucose-table-body');
-
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无数据</td></tr>';
+    // PC桌面端表格性能优化函数
+    async function renderTableWithPerformance(tbodyId, data, rowRenderer) {
+        const tbody = document.getElementById(tbodyId);
+        
+        if (!tbody) {
+            console.error('表格元素未找到:', tbodyId);
             return;
         }
-
-        tbody.innerHTML = data.map(item => {
+        
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted">暂无数据</td></tr>';
+            return;
+        }
+        
+        // 显示加载指示器（大数据集）
+        if (data.length > 200) {
+            showTableLoadingIndicator(tbodyId, true);
+        }
+        
+        // 使用 DocumentFragment 和分块处理优化性能
+        const chunkSize = 100;
+        const yieldInterval = 200; // 每200条记录让出UI线程
+        
+        try {
+            // 清空表格并开始处理
+            tbody.innerHTML = '';
+            
+            for (let i = 0; i < data.length; i += chunkSize) {
+                const chunk = data.slice(i, i + chunkSize);
+                const fragment = document.createDocumentFragment();
+                
+                // 处理当前块
+                chunk.forEach((item, index) => {
+                    const row = rowRenderer(item, i + index);
+                    if (row) {
+                        fragment.appendChild(row);
+                    }
+                });
+                
+                // 批量添加到DOM
+                tbody.appendChild(fragment);
+                
+                // 定期让出UI线程以避免阻塞
+                if ((i + chunkSize) % yieldInterval === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+            
+            // 处理完成，隐藏加载指示器
+            showTableLoadingIndicator(tbodyId, false);
+            // 添加GPU加速类
+            tbody.classList.add('gpu-accelerated');
+            
+        } catch (error) {
+            console.error('表格渲染失败:', error);
+            showTableLoadingIndicator(tbodyId, false);
+        }
+    }
+    
+    // 创建表格行元素
+    function createTableRowElement(item, type) {
+        const row = document.createElement('tr');
+        row.className = 'table-row-enhanced';
+        
+        if (type === 'glucose') {
+            // 血糖表格行
+            const glucoseColor = getGlucoseColor(item.value_mmol);
+            const directionArrow = formatDirection(item.direction);
+            
             // 移动端合并显示
             const mobileContent = `
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
                         <div class="fw-bold">${item.time.split(' ')[1]}</div>
-                        <small class="text-muted">${item.time.split(' ')[0]}</small>
+                        <div class="small text-muted">${item.time.split(' ')[0]}</div>
                     </div>
                     <div class="text-end">
-                        <div class="fw-bold ${getGlucoseColor(item.value_mmol)}">${formatGlucoseValue(item.value_mmol)} mmol/L</div>
-                        <small class="text-muted">${item.value_mgdl} mg/dL ${formatDirection(item.direction)}</small>
+                        <div class="fw-bold ${glucoseColor}">${item.value_mmol}</div>
+                        <div class="small">${directionArrow}</div>
                     </div>
                 </div>
             `;
-
-            return `
-                <tr>
-                    <td class="d-none d-sm-table-cell">${item.time}</td>
-                    <td class="d-sm-none">${mobileContent}</td>
-                    <td class="d-none d-sm-table-cell ${getGlucoseColor(item.value_mmol)}">${formatGlucoseValue(item.value_mmol)}</td>
-                    <td class="d-none d-md-table-cell">${item.value_mgdl}</td>
-                    <td class="d-none d-sm-table-cell">${formatDirection(item.direction)}</td>
-                </tr>
+            
+            row.innerHTML = `
+                <td class="d-none d-md-table-cell">${item.time.split(' ')[1]}</td>
+                <td class="d-none d-md-table-cell">${item.time.split(' ')[0]}</td>
+                <td class="text-center fw-bold ${glucoseColor}">${item.value_mmol}</td>
+                <td class="text-center">${directionArrow}</td>
+                <td class="d-table-cell d-md-none">${mobileContent}</td>
             `;
-        }).join('');
+        } else if (type === 'treatment') {
+            // 治疗表格行
+            const durationDisplay = item.duration > 0 ? `${item.duration}分钟` : '-';
+            
+            const typeAndNotes = [];
+            if (item.eventType) typeAndNotes.push(item.eventType);
+            if (item.notes) typeAndNotes.push(item.notes);
+            const typeAndNotesDisplay = typeAndNotes.length > 0 ? typeAndNotes.join(' - ') : '-';
+            
+            row.innerHTML = `
+                <td>${item.time}</td>
+                <td>${durationDisplay}</td>
+                <td>${typeAndNotesDisplay}</td>
+            `;
+        } else if (type === 'prediction') {
+            // 预测表格行
+            const glucoseColor = getGlucoseColor(item.value_mmol);
+            const cgmGlucoseColor = item.cgm_value_mmol ? getGlucoseColor(item.cgm_value_mmol) : 'text-muted';
+            const cgmValueDisplay = item.cgm_value_mmol ? formatGlucoseValue(item.cgm_value_mmol) : 'N/A';
+            
+            row.innerHTML = `
+                <td>${item.time}</td>
+                <td class="text-center fw-bold ${glucoseColor}">${item.value_mmol}</td>
+                <td class="text-center">${cgmValueDisplay}</td>
+                <td class="text-center">${item.diff_mmol ? item.diff_mmol.toFixed(2) : 'N/A'}</td>
+                <td class="text-center">${item.diff_percent ? item.diff_percent.toFixed(1) + '%' : 'N/A'}</td>
+            `;
+        }
+        
+        return row;
+    }
+    
+    // 显示表格加载指示器
+    function showTableLoadingIndicator(tbodyId, show) {
+        const tbody = document.getElementById(tbodyId);
+        const table = tbody.closest('table');
+        
+        if (show) {
+            // 创建加载指示器
+            const loadingRow = document.createElement('tr');
+            loadingRow.id = `${tbodyId}-loading`;
+            loadingRow.className = 'table-loading';
+            loadingRow.innerHTML = `
+                <td colspan="10" class="text-center py-4">
+                    <div class="d-flex justify-content-center align-items-center">
+                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                        <span class="text-muted">正在加载数据...</span>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(loadingRow);
+        } else {
+            // 移除加载指示器
+            const loadingRow = document.getElementById(`${tbodyId}-loading`);
+            if (loadingRow) {
+                loadingRow.remove();
+            }
+        }
+    }
+    
+    // 更新血糖表格（优化版本）
+    function updateGlucoseTable(data) {
+        // 使用优化渲染函数
+        renderTableWithPerformance('glucose-table-body', data, (item, index) => {
+            return createTableRowElement(item, 'glucose');
+        });
     }
 
     // 获取血糖值颜色
@@ -667,15 +794,8 @@
         return 'text-success';
     }
     
-    // 更新治疗表格
+    // 更新治疗表格（优化版本）
     function updateTreatmentTable(data) {
-        const tbody = document.getElementById('treatment-table-body');
-
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
-            return;
-        }
-
         // 过滤有营养成分的数据（碳水、蛋白质或脂肪任一大于0）
         const filteredData = data.filter(item =>
             (item.carbs && item.carbs > 0) ||
@@ -685,7 +805,11 @@
             item.event_type === 'Meal Bolus'
         );
 
-        tbody.innerHTML = filteredData.map(item => {
+        // 使用优化渲染函数
+        renderTableWithPerformance('treatment-table-body', filteredData, (item, index) => {
+            const row = document.createElement('tr');
+            row.className = 'table-row-enhanced';
+            
             // 构建营养成分显示
             const nutritionParts = [];
             if (item.carbs && item.carbs > 0) {
@@ -727,27 +851,24 @@
                 </div>
             `;
 
-            return `
-                <tr>
-                    <td class="d-none d-sm-table-cell">${item.time}</td>
-                    <td class="d-sm-none">${mobileContent}</td>
-                    <td class="d-none d-sm-table-cell">${nutritionDisplay}</td>
-                    <td class="d-none d-md-table-cell">${typeDisplay}</td>
-                </tr>
+            row.innerHTML = `
+                <td class="d-none d-sm-table-cell">${item.time}</td>
+                <td class="d-sm-none">${mobileContent}</td>
+                <td class="d-none d-sm-table-cell">${nutritionDisplay}</td>
+                <td class="d-none d-md-table-cell">${typeDisplay}</td>
             `;
-        }).join('');
+            
+            return row;
+        });
     }
 
-    // 更新运动表格
+    // 更新运动表格（优化版本）
     function updateActivityTable(data) {
-        const tbody = document.getElementById('activity-table-body');
-
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = data.map(item => {
+        // 使用优化渲染函数
+        renderTableWithPerformance('activity-table-body', data, (item, index) => {
+            const row = document.createElement('tr');
+            row.className = 'table-row-enhanced';
+            
             // 构建时长显示
             const durationDisplay = item.duration > 0 ? `${item.duration}分钟` : '-';
             
@@ -775,27 +896,24 @@
                 </div>
             `;
 
-            return `
-                <tr>
-                    <td class="d-none d-sm-table-cell">${item.time}</td>
-                    <td class="d-sm-none">${mobileContent}</td>
-                    <td class="d-none d-sm-table-cell">${item.event_type || '运动'}</td>
-                    <td class="d-none d-md-table-cell">${durationDisplay} ${typeDisplay !== '-' ? `<br><small class="text-muted">${typeDisplay}</small>` : ''}</td>
-                </tr>
+            row.innerHTML = `
+                <td class="d-none d-sm-table-cell">${item.time}</td>
+                <td class="d-sm-none">${mobileContent}</td>
+                <td class="d-none d-sm-table-cell">${item.event_type || '运动'}</td>
+                <td class="d-none d-md-table-cell">${durationDisplay} ${typeDisplay !== '-' ? `<br><small class="text-muted">${typeDisplay}</small>` : ''}</td>
             `;
-        }).join('');
+            
+            return row;
+        });
     }
 
-    // 更新指尖血糖表格
+    // 更新指尖血糖表格（优化版本）
     function updateMeterTable(data) {
-        const tbody = document.getElementById('meter-table-body');
-
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">暂无数据</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = data.map(item => {
+        // 使用优化渲染函数
+        renderTableWithPerformance('meter-table-body', data, (item, index) => {
+            const row = document.createElement('tr');
+            row.className = 'table-row-enhanced';
+            
             // 获取血糖值颜色
             const glucoseColor = getGlucoseColor(item.value_mmol);
             const cgmGlucoseColor = item.cgm_value_mmol ? getGlucoseColor(item.cgm_value_mmol) : 'text-muted';
@@ -815,15 +933,15 @@
                 </div>
             `;
 
-            return `
-                <tr>
-                    <td class="d-none d-sm-table-cell">${item.time}</td>
-                    <td class="d-sm-none">${mobileContent}</td>
-                    <td class="d-none d-sm-table-cell ${glucoseColor}">${formatGlucoseValue(item.value_mmol)}</td>
-                    <td class="d-none d-md-table-cell ${cgmGlucoseColor}">${cgmValueDisplay}</td>
-                </tr>
+            row.innerHTML = `
+                <td class="d-none d-sm-table-cell">${item.time}</td>
+                <td class="d-sm-none">${mobileContent}</td>
+                <td class="d-none d-sm-table-cell ${glucoseColor}">${formatGlucoseValue(item.value_mmol)}</td>
+                <td class="d-none d-md-table-cell ${cgmGlucoseColor}">${cgmValueDisplay}</td>
             `;
-        }).join('');
+            
+            return row;
+        });
     }
     
     // 更新统计信息
@@ -919,6 +1037,179 @@
         }
     }
     
+    // 表格行选择功能
+    function setupTableSelection() {
+        // 为所有表格行添加点击事件
+        const tableBodies = ['glucose-table-body', 'treatment-table-body', 'activity-table-body', 'meter-table-body'];
+        
+        tableBodies.forEach(bodyId => {
+            const tbody = document.getElementById(bodyId);
+            if (!tbody) return;
+            
+            tbody.addEventListener('click', function(e) {
+                const row = e.target.closest('tr');
+                if (!row || row.classList.contains('loading')) return;
+                
+                // 移除同一表格中其他行的选中状态
+                tbody.querySelectorAll('tr.selected').forEach(selectedRow => {
+                    if (selectedRow !== row) {
+                        selectedRow.classList.remove('selected');
+                    }
+                });
+                
+                // 切换当前行的选中状态
+                row.classList.toggle('selected');
+                
+                // 获取行数据并显示详情
+                if (row.classList.contains('selected')) {
+                    showTableRowDetails(row, bodyId);
+                }
+            });
+            
+            // 添加触摸支持
+            tbody.addEventListener('touchstart', function(e) {
+                const row = e.target.closest('tr');
+                if (!row || row.classList.contains('loading')) return;
+                
+                // 防止双击缩放
+                e.preventDefault();
+            }, { passive: false });
+        });
+    }
+    
+    // 显示表格行详情
+    function showTableRowDetails(row, tableType) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length === 0) return;
+        
+        let details = '';
+        let title = '';
+        
+        switch(tableType) {
+            case 'glucose-table-body':
+                title = '血糖数据详情';
+                // 从移动端视图或桌面端视图提取数据
+                const mobileCell = row.querySelector('.d-sm-none');
+                if (mobileCell) {
+                    // 移动端格式
+                    const mobileContent = mobileCell.innerHTML;
+                    details = mobileContent;
+                } else {
+                    // 桌面端格式
+                    const time = cells[0]?.textContent || '';
+                    const glucose = cells[1]?.textContent || '';
+                    const mgdl = cells[2]?.textContent || '';
+                    const direction = cells[3]?.textContent || '';
+                    details = `
+                        <div class="row">
+                            <div class="col-6"><strong>时间:</strong> ${time}</div>
+                            <div class="col-6"><strong>血糖:</strong> ${glucose}</div>
+                            <div class="col-6"><strong>mg/dL:</strong> ${mgdl}</div>
+                            <div class="col-6"><strong>趋势:</strong> ${direction}</div>
+                        </div>
+                    `;
+                }
+                break;
+                
+            case 'treatment-table-body':
+                title = '餐食记录详情';
+                const treatmentMobile = row.querySelector('.d-sm-none');
+                if (treatmentMobile) {
+                    details = treatmentMobile.innerHTML;
+                } else {
+                    const time = cells[0]?.textContent || '';
+                    const nutrition = cells[1]?.textContent || '';
+                    const type = cells[2]?.textContent || '';
+                    details = `
+                        <div class="row">
+                            <div class="col-6"><strong>时间:</strong> ${time}</div>
+                            <div class="col-6"><strong>营养:</strong> ${nutrition}</div>
+                            <div class="col-12"><strong>类型:</strong> ${type}</div>
+                        </div>
+                    `;
+                }
+                break;
+                
+            case 'activity-table-body':
+                title = '运动记录详情';
+                const activityMobile = row.querySelector('.d-sm-none');
+                if (activityMobile) {
+                    details = activityMobile.innerHTML;
+                } else {
+                    const time = cells[0]?.textContent || '';
+                    const activityType = cells[1]?.textContent || '';
+                    const duration = cells[2]?.textContent || '';
+                    details = `
+                        <div class="row">
+                            <div class="col-6"><strong>时间:</strong> ${time}</div>
+                            <div class="col-6"><strong>类型:</strong> ${activityType}</div>
+                            <div class="col-12"><strong>时长:</strong> ${duration}</div>
+                        </div>
+                    `;
+                }
+                break;
+                
+            case 'meter-table-body':
+                title = '指尖血糖详情';
+                const meterMobile = row.querySelector('.d-sm-none');
+                if (meterMobile) {
+                    details = meterMobile.innerHTML;
+                } else {
+                    const time = cells[0]?.textContent || '';
+                    const glucose = cells[1]?.textContent || '';
+                    const cgmGlucose = cells[2]?.textContent || '';
+                    details = `
+                        <div class="row">
+                            <div class="col-6"><strong>时间:</strong> ${time}</div>
+                            <div class="col-6"><strong>血糖:</strong> ${glucose}</div>
+                            <div class="col-12"><strong>CGM血糖:</strong> ${cgmGlucose}</div>
+                        </div>
+                    `;
+                }
+                break;
+        }
+        
+        // 显示详情模态框
+        showTableDetailModal(title, details);
+    }
+    
+    // 显示表格详情模态框
+    function showTableDetailModal(title, details) {
+        // 检查是否已存在模态框
+        let modal = document.getElementById('tableDetailModal');
+        if (!modal) {
+            // 创建模态框
+            modal = document.createElement('div');
+            modal.id = 'tableDetailModal';
+            modal.className = 'modal fade';
+            modal.innerHTML = `
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">${title}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body" id="tableDetailContent">
+                            ${details}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        } else {
+            // 更新现有模态框
+            modal.querySelector('.modal-title').textContent = title;
+            modal.querySelector('#tableDetailContent').innerHTML = details;
+        }
+        
+        // 显示模态框
+        const modalInstance = new bootstrap.Modal(modal);
+        modalInstance.show();
+    }
+    
     // 更新血糖图表
     function updateGlucoseChart(glucoseData, treatmentData = [], activityData = []) {
         const ctx = document.getElementById('glucoseChart').getContext('2d');
@@ -926,6 +1217,25 @@
         if (glucoseChart) {
             glucoseChart.destroy();
         }
+        
+        // 检查缩放插件是否可用 - 仅用于日志记录
+        const zoomPluginAvailable = typeof Chart !== 'undefined' && Chart.version;
+        let pluginStatus = '检查失败';
+        
+        if (zoomPluginAvailable) {
+            try {
+                pluginStatus = Chart.registry && Chart.registry.plugins && 
+                                (Chart.registry.plugins.items.some(p => p.id === 'zoom') || 
+                                 Object.keys(Chart.registry.plugins.items).some(key => Chart.registry.plugins.items[key].id === 'zoom')) 
+                                ? '✅ 可用' : '❌ 不可用';
+            } catch (error) {
+                pluginStatus = '⚠️ 检查异常';
+            }
+        }
+        
+        console.log('Chart.js版本:', Chart.version || '未加载');
+        console.log('缩放插件状态:', pluginStatus);
+        console.log('缩放功能将始终启用，插件不可用时会被忽略');
         
         const labels = glucoseData.map(item => item.time).reverse();
         const values = glucoseData.map(item => item.value_mmol).reverse();
@@ -1153,6 +1463,7 @@
             }
         };
         
+        // 创建图表并添加事件监听
         glucoseChart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -1218,34 +1529,46 @@
                     intersect: true,
                     mode: 'nearest'
                 },
-                scales: {
-                    y: {
-                        beginAtZero: false,
-                        min: Math.min(3.0, Math.min(...values) - 1),
-                        max: Math.max(15.0, Math.max(...values) + 1),
-                        grid: {
-                            color: 'rgba(0,0,0,0.1)'
+                // 缩放插件配置 - 总是启用，如果插件不可用会自动忽略
+                plugins: {
+                    zoom: {
+                        zoom: {
+                            wheel: {
+                                enabled: true,
+                                speed: 0.1
+                            },
+                            pinch: {
+                                enabled: true
+                            },
+                            mode: 'x',
+                            sensitivity: 0.3,
+                            onZoomComplete: function({chart}) {
+                                console.log('缩放完成，当前范围:', chart.scales.x.min, '至', chart.scales.x.max);
+                            },
+                            onZoomRejected: function() {
+                                console.log('缩放被拒绝');
+                            }
                         },
-                        ticks: {
-                            font: {
-                                size: window.innerWidth < 768 ? 10 : 12
+                        pan: {
+                            enabled: true,
+                            mode: 'x',
+                            modifierKey: null,
+                            threshold: 10,
+                            onPanComplete: function({chart}) {
+                                console.log('平移完成，当前范围:', chart.scales.x.min, '至', chart.scales.x.max);
+                            },
+                            onPanRejected: function() {
+                                console.log('平移被拒绝');
+                            }
+                        },
+                        limits: {
+                            x: {
+                                min: 'original',
+                                max: 'original',
+                                minRange: 2
                             }
                         }
                     },
-                    x: {
-                        ticks: {
-                            maxTicksLimit: window.innerWidth < 768 ? 6 : 10,
-                            font: {
-                                size: window.innerWidth < 768 ? 10 : 12
-                            },
-                            maxRotation: window.innerWidth < 768 ? 45 : 0
-                        },
-                        grid: {
-                            color: 'rgba(0,0,0,0.1)'
-                        }
-                    }
-                },
-                plugins: {
                     // 注册自定义插件
                     ...[verticalLinePlugin],
                     legend: {
@@ -1394,9 +1717,437 @@
                             }
                         }
                     }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        min: Math.min(3.0, Math.min(...values) - 1),
+                        max: Math.max(15.0, Math.max(...values) + 1),
+                        grid: {
+                            color: 'rgba(0,0,0,0.1)'
+                        },
+                        ticks: {
+                            font: {
+                                size: window.innerWidth < 768 ? 10 : 12
+                            }
+                        }
+                    },
+                    x: {
+                        type: 'category',
+                        bounds: 'data', // 允许显示超出数据边界的范围
+                        ticks: {
+                            maxTicksLimit: window.innerWidth < 768 ? 6 : 10,
+                            font: {
+                                size: window.innerWidth < 768 ? 10 : 12
+                            },
+                            maxRotation: window.innerWidth < 768 ? 45 : 0
+                        },
+                        grid: {
+                            color: 'rgba(0,0,0,0.1)'
+                        }
+                    }
                 }
             }
         });
+        
+        // 移动端触摸优化
+        setupMobileOptimizations(glucoseChart);
+        
+        // 锚点拖动优化
+        setupAnchorPointDragging(glucoseChart);
+        
+        console.log('图表创建完成，移动端和PC端优化已配置');
+    }
+    
+    // 移动端触摸优化设置
+    function setupMobileOptimizations(chart) {
+        if (!chart) return;
+        
+        const canvas = chart.canvas;
+        const container = canvas.closest('.chart-container');
+        
+        if (!container) return;
+        
+        // 添加触摸事件监听器
+        let touchStartTime = 0;
+        let touchStartDistance = 0;
+        let isZooming = false;
+        let isPanning = false;
+        
+        // 触摸开始
+        canvas.addEventListener('touchstart', function(e) {
+            const now = Date.now();
+            touchStartTime = now;
+            
+            if (e.touches.length === 2) {
+                // 双指触摸 - 缩放
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                touchStartDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                isZooming = true;
+                container.classList.add('zooming');
+                console.log('开始双指缩放');
+            } else if (e.touches.length === 1) {
+                // 单指触摸 - 平移
+                isPanning = true;
+                console.log('开始单指平移');
+            }
+            
+            e.preventDefault();
+        }, { passive: false });
+        
+        // 触摸移动
+        canvas.addEventListener('touchmove', function(e) {
+            if (isZooming && e.touches.length === 2) {
+                // 处理缩放
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const currentDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                
+                const scale = currentDistance / touchStartDistance;
+                const zoomLevel = scale > 1 ? 1.1 : 0.9;
+                
+                try {
+                    chart.zoom(zoomLevel);
+                    console.log('触摸缩放:', scale);
+                } catch (error) {
+                    console.error('触摸缩放失败:', error);
+                }
+                
+                touchStartDistance = currentDistance;
+            } else if (isPanning && e.touches.length === 1) {
+                // 处理平移 - 让Chart.js插件处理
+                console.log('触摸平移中...');
+            }
+            
+            e.preventDefault();
+        }, { passive: false });
+        
+        // 触摸结束
+        canvas.addEventListener('touchend', function(e) {
+            const touchDuration = Date.now() - touchStartTime;
+            
+            if (isZooming) {
+                console.log('双指缩放结束');
+            } else if (isPanning) {
+                console.log('单指平移结束');
+            }
+            
+            isZooming = false;
+            isPanning = false;
+            container.classList.remove('zooming');
+            
+            e.preventDefault();
+        }, { passive: false });
+        
+        // 防止默认的触摸行为
+        canvas.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+        }, { passive: false });
+        
+        console.log('移动端触摸优化已配置');
+    }
+    
+    // 锚点拖动系统
+    class AnchorPointDragSystem {
+        constructor(chart) {
+            this.chart = chart;
+            this.canvas = chart.canvas;
+            this.container = this.canvas.closest('.chart-container');
+            this.isActive = false;
+            this.anchorPoint = null;
+            this.startX = 0;
+            this.startY = 0;
+            this.anchorTimeValue = null;
+            this.anchorPixelPosition = 0;
+            this.originalTimeRange = null;
+            
+            // 保存绑定的函数引用以避免内存泄漏
+            this.boundHandleStart = this.handleStart.bind(this);
+            this.boundHandleMove = this.handleMove.bind(this);
+            this.boundHandleEnd = this.handleEnd.bind(this);
+            
+            this.initializeAnchorPoint();
+            this.bindEvents();
+        }
+        
+        initializeAnchorPoint() {
+            // 创建锚点视觉指示器
+            this.anchorPoint = document.createElement('div');
+            this.anchorPoint.className = 'chart-anchor-point';
+            this.anchorPoint.style.display = 'none';
+            this.container.appendChild(this.anchorPoint);
+        }
+        
+        bindEvents() {
+            // PC端事件
+            this.canvas.addEventListener('mousedown', this.boundHandleStart);
+            document.addEventListener('mousemove', this.boundHandleMove);
+            document.addEventListener('mouseup', this.boundHandleEnd);
+            
+            // 移动端事件
+            this.canvas.addEventListener('touchstart', this.boundHandleStart, { passive: false });
+            document.addEventListener('touchmove', this.boundHandleMove, { passive: false });
+            document.addEventListener('touchend', this.boundHandleEnd);
+        }
+        
+        handleStart(e) {
+            // 只处理左键或单指触摸
+            if (e.type === 'mousedown' && e.button !== 0) return;
+            if (e.type === 'touchstart' && e.touches.length !== 1) return;
+            
+            e.preventDefault();
+            
+            const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+            const clientY = e.type === 'touchstart' ? e.touches[0].clientY : e.clientY;
+            
+            this.startX = clientX;
+            this.startY = clientY;
+            this.isActive = true;
+            
+            // 计算点击位置对应的时间值
+            this.anchorTimeValue = this.getTimeFromCanvasPosition(clientX);
+            this.anchorPixelPosition = this.getRelativeCanvasPosition(clientX);
+            
+            // 保存原始时间范围
+            this.originalTimeRange = {
+                min: this.chart.scales.x.min,
+                max: this.chart.scales.x.max
+            };
+            
+            // 显示锚点指示器
+            this.showAnchorPoint(clientX, clientY);
+            
+            // 添加触摸反馈样式
+            this.addTouchFeedback();
+            
+            // 仅在开发环境中输出详细日志
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                console.log('锚点拖动开始:', {
+                    anchorTime: this.anchorTimeValue,
+                    pixelPosition: this.anchorPixelPosition,
+                    originalRange: this.originalTimeRange
+                });
+            }
+        }
+        
+        handleMove(e) {
+            if (!this.isActive) return;
+            
+            e.preventDefault();
+            
+            const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+            const deltaX = clientX - this.startX;
+            
+            // 计算新的图表范围
+            const newRange = this.calculateNewRange(deltaX);
+            
+            // 更新图表范围（仅在newRange有效时）
+            if (newRange) {
+                this.updateChartRange(newRange);
+            }
+            
+            // 更新锚点位置
+            this.updateAnchorPosition(clientX);
+        }
+        
+        handleEnd(e) {
+            if (!this.isActive) return;
+            
+            this.isActive = false;
+            
+            // 隐藏锚点指示器
+            this.hideAnchorPoint();
+            
+            // 移除触摸反馈样式
+            this.removeTouchFeedback();
+            
+            // 仅在开发环境中输出日志
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                console.log('锚点拖动结束');
+            }
+        }
+        
+        getTimeFromCanvasPosition(clientX) {
+            const rect = this.canvas.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const canvasWidth = rect.width;
+            
+            // 计算在画布上的相对位置 (0-1)
+            const relativePosition = x / canvasWidth;
+            
+            // 获取当前图表的时间范围
+            const timeScale = this.chart.scales.x;
+            const minTime = timeScale.min;
+            const maxTime = timeScale.max;
+            
+            // 计算对应的时间值
+            const timeValue = minTime + (maxTime - minTime) * relativePosition;
+            
+            return new Date(timeValue);
+        }
+        
+        getRelativeCanvasPosition(clientX) {
+            const rect = this.canvas.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const canvasWidth = rect.width;
+            
+            return x / canvasWidth; // 返回相对位置 (0-1)
+        }
+        
+        getTimeRange() {
+            // 计算原始时间范围的跨度
+            if (!this.originalTimeRange || typeof this.originalTimeRange.min !== 'number' || typeof this.originalTimeRange.max !== 'number') {
+                return 0;
+            }
+            return this.originalTimeRange.max - this.originalTimeRange.min;
+        }
+        
+        calculateNewRange(deltaX) {
+            // 边界检查：确保原始时间范围存在
+            if (!this.originalTimeRange) {
+                console.warn('原始时间范围不存在');
+                return null;
+            }
+            
+            const canvasWidth = this.canvas.getBoundingClientRect().width;
+            const timeRange = this.getTimeRange();
+            
+            // 边界检查：确保画布宽度和时间范围有效
+            if (canvasWidth <= 0 || timeRange <= 0) {
+                console.warn('无效的画布宽度或时间范围:', { canvasWidth, timeRange });
+                return null;
+            }
+            
+            // 计算拖动距离对应的时间变化
+            const timeDelta = (deltaX / canvasWidth) * timeRange;
+            
+            // 计算新的时间范围，使锚点跟随手指
+            const newMin = this.originalTimeRange.min - timeDelta;
+            const newMax = this.originalTimeRange.max - timeDelta;
+            
+            return {
+                min: newMin,
+                max: newMax
+            };
+        }
+        
+        updateChartRange(newRange) {
+            try {
+                // 边界检查：确保newRange对象存在且包含min和max属性
+                if (!newRange || typeof newRange.min !== 'number' || typeof newRange.max !== 'number') {
+                    console.warn('无效的时间范围参数:', newRange);
+                    return;
+                }
+                
+                // 边界检查：确保最小值小于最大值
+                if (newRange.min >= newRange.max) {
+                    console.warn('时间范围无效：最小值必须小于最大值', newRange);
+                    return;
+                }
+                
+                // 边界检查：确保图表和其选项存在
+                if (!this.chart || !this.chart.options || !this.chart.options.scales || !this.chart.options.scales.x) {
+                    console.warn('图表对象或其选项不存在');
+                    return;
+                }
+                
+                // 直接更新图表的时间范围
+                this.chart.options.scales.x.min = newRange.min;
+                this.chart.options.scales.x.max = newRange.max;
+                this.chart.update('none'); // 无动画更新以提高性能
+                
+            } catch (error) {
+                console.error('更新图表范围时发生错误:', error);
+                // 不抛出错误，避免影响用户体验
+            }
+        }
+        
+        showAnchorPoint(clientX, clientY) {
+            const rect = this.canvas.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+            
+            this.anchorPoint.style.left = x + 'px';
+            this.anchorPoint.style.top = y + 'px';
+            this.anchorPoint.style.display = 'block';
+            this.anchorPoint.classList.add('active');
+        }
+        
+        updateAnchorPosition(clientX) {
+            const rect = this.canvas.getBoundingClientRect();
+            const x = clientX - rect.left;
+            
+            this.anchorPoint.style.left = x + 'px';
+        }
+        
+        hideAnchorPoint() {
+            this.anchorPoint.style.display = 'none';
+            this.anchorPoint.classList.remove('active');
+        }
+        
+        addTouchFeedback() {
+            this.container.classList.add('touch-active', 'touch-pressing');
+            this.canvas.classList.add('touch-active');
+        }
+        
+        removeTouchFeedback() {
+            this.container.classList.remove('touch-active', 'touch-pressing');
+            this.canvas.classList.remove('touch-active');
+        }
+        
+        destroy() {
+            // 清理事件监听器
+            this.canvas.removeEventListener('mousedown', this.boundHandleStart);
+            document.removeEventListener('mousemove', this.boundHandleMove);
+            document.removeEventListener('mouseup', this.boundHandleEnd);
+            this.canvas.removeEventListener('touchstart', this.boundHandleStart);
+            document.removeEventListener('touchmove', this.boundHandleMove);
+            document.removeEventListener('touchend', this.boundHandleEnd);
+            
+            // 移除锚点元素
+            if (this.anchorPoint && this.anchorPoint.parentNode) {
+                this.anchorPoint.parentNode.removeChild(this.anchorPoint);
+            }
+        }
+    }
+    
+    // 替换现有的setupPcPanOptimizations函数
+    function setupAnchorPointDragging(chart) {
+        if (!chart) return;
+        
+        // 清理现有的拖动系统
+        if (chart.anchorDragSystem) {
+            chart.anchorDragSystem.destroy();
+        }
+        
+        // 创建新的锚点拖动系统
+        chart.anchorDragSystem = new AnchorPointDragSystem(chart);
+        
+        // 仅在开发环境中输出日志
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            console.log('锚点拖动系统已初始化');
+        }
+    }
+    
+    // 重置图表缩放
+    function resetChartZoom() {
+        if (glucoseChart) {
+            try {
+                glucoseChart.resetZoom();
+                console.log('图表缩放重置成功');
+            } catch (error) {
+                console.error('重置缩放失败:', error);
+            }
+        } else {
+            console.log('图表不存在，无法重置缩放');
+        }
     }
     
     // 获取AI分析
@@ -1444,7 +2195,7 @@
         const content = document.querySelector('#analysis-content pre');
         if (content) {
             navigator.clipboard.writeText(content.textContent).then(() => {
-                showNotification('分析结果已复制到剪贴板', 'success');
+                console.log('分析结果已复制到剪贴板');
             });
         }
     }
@@ -1509,7 +2260,7 @@
                     </div>
                 `;
                 document.getElementById('copyConsultBtn').style.display = 'inline-block';
-                showNotification('AI咨询完成', 'success');
+                console.log('AI咨询完成');
             } else {
                 document.getElementById('consult-content').innerHTML = `
                     <div class="alert alert-danger">
@@ -1539,7 +2290,7 @@
     function copyConsultResponse() {
         const content = document.getElementById('consult-content').innerText;
         navigator.clipboard.writeText(content).then(() => {
-            showNotification('回复已复制到剪贴板', 'success');
+            console.log('回复已复制到剪贴板');
         }).catch(() => {
             showNotification('复制失败，请手动选择复制', 'warning');
         });
@@ -1774,7 +2525,7 @@
             .then(data => {
                 if (data.status === 'success') {
                     updatePredictionDisplay(data.prediction, data.risk_assessment);
-                    showNotification('预测已更新', 'success');
+                    console.log('预测已更新');
                 } else {
                     // 显示错误信息
                     if (confidenceEl) {
