@@ -344,6 +344,44 @@
                                     </div>
                                 </div>
                             </div>
+                            
+                            <!-- 新增的血糖报警范围配置 -->
+                            <div class="row mt-3">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="high-glucose-threshold" class="form-label">高血糖报警阈值 (mmol/L)</label>
+                                        <input type="number" class="form-control" id="high-glucose-threshold" 
+                                               value="{{ config.alert.high_glucose_threshold or 10.0 }}" 
+                                               min="1.0" max="30.0" step="0.1" placeholder="10.0">
+                                        <div class="form-text">高于此值时触发高血糖报警 (示例: 10.0)</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="low-glucose-threshold" class="form-label">低血糖报警阈值 (mmol/L)</label>
+                                        <input type="number" class="form-control" id="low-glucose-threshold" 
+                                               value="{{ config.alert.low_glucose_threshold or 3.9 }}" 
+                                               min="1.0" max="30.0" step="0.1" placeholder="3.9">
+                                        <div class="form-text">低于此值时触发低血糖报警 (示例: 3.9)</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 新增的报警邮箱通知开关 -->
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="enable-email-alerts" 
+                                                   {% if config.alert.enable_email_alerts %}checked{% endif %}>
+                                            <label class="form-check-label" for="enable-email-alerts">
+                                                启用血糖报警邮箱通知
+                                            </label>
+                                        </div>
+                                        <div class="form-text">血糖预测报警时发送邮件通知</div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -556,8 +594,27 @@
                 insulin_dosage: parseFloat(document.getElementById('insulin-dosage').value) || 0,
                 insulin_frequency: document.getElementById('insulin-frequency').value,
                 insulin_custom_frequency: document.getElementById('insulin-custom-frequency').value.trim()
+            },
+            alert: {
+                high_glucose_threshold: parseFloat(document.getElementById('high-glucose-threshold').value) || 10.0,
+                low_glucose_threshold: parseFloat(document.getElementById('low-glucose-threshold').value) || 3.9,
+                enable_email_alerts: document.getElementById('enable-email-alerts').checked
             }
         };
+        
+        // 验证血糖报警阈值
+        const highThreshold = config.alert.high_glucose_threshold;
+        const lowThreshold = config.alert.low_glucose_threshold;
+        
+        if (highThreshold <= lowThreshold) {
+            showNotification('高血糖阈值必须大于低血糖阈值', 'danger');
+            return;
+        }
+        
+        if (highThreshold < 1.0 || highThreshold > 30.0 || lowThreshold < 1.0 || lowThreshold > 30.0) {
+            showNotification('血糖阈值必须在1.0-30.0 mmol/L范围内', 'danger');
+            return;
+        }
         
         // 验证必填字段
         if (!config.nightscout.api_url) {

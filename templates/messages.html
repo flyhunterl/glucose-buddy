@@ -13,15 +13,33 @@
                     <span class="badge bg-danger ms-2">{{ unread_count }}</span>
                     {% endif %}
                 </h5>
-                <div class="btn-group">
-                    <button class="btn btn-outline-primary btn-sm active" onclick="filterMessages('all')">
-                        全部
-                    </button>
-                    <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('analysis')">
-                        AI分析
-                    </button>
-                    <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('consultation')">
-                        AI咨询
+                <div class="d-flex align-items-center">
+                    <div class="btn-group me-2">
+                        <button class="btn btn-outline-primary btn-sm active" onclick="filterMessages('all')">
+                            全部
+                        </button>
+                        <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('analysis')">
+                            AI分析
+                        </button>
+                        <button class="btn btn-outline-primary btn-sm" onclick="filterMessages('consultation')">
+                            AI咨询
+                        </button>
+                    </div>
+                    <!-- 批量操作工具栏 -->
+                    <div id="batchToolbar" class="btn-group d-none">
+                        <button class="btn btn-danger btn-sm" onclick="deleteSelectedMessages()" title="删除选中">
+                            <i class="fas fa-trash"></i> 删除选中
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="clearSelection()" title="取消选择">
+                            <i class="fas fa-times"></i> 取消选择
+                        </button>
+                        <span class="ms-2 align-self-center">
+                            <small class="text-muted">已选择 <span id="selectedCount">0</span> 条</small>
+                        </span>
+                    </div>
+                    <!-- 全选按钮 -->
+                    <button id="selectAllBtn" class="btn btn-outline-secondary btn-sm ms-2 d-none" onclick="toggleSelectAll()" title="全选/取消全选">
+                        <i class="fas fa-check-square"></i> 全选
                     </button>
                 </div>
             </div>
@@ -71,6 +89,7 @@
     let currentMessages = [];
     let currentFilter = 'all';
     let currentMessageId = null;
+    let selectedMessageIds = new Set();
 
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
@@ -97,6 +116,8 @@
                         </div>
                     `;
                 }
+                // 重置选择状态
+                clearSelection();
             })
             .catch(error => {
                 console.error('加载消息失败:', error);
@@ -106,6 +127,118 @@
                     </div>
                 `;
             });
+    }
+
+    // 更新选择状态UI
+    function updateSelectionUI() {
+        const checkboxes = document.querySelectorAll('.message-checkbox');
+        const selectedCheckboxes = document.querySelectorAll('.message-checkbox:checked');
+        
+        // 更新选中的消息ID集合
+        selectedMessageIds.clear();
+        selectedCheckboxes.forEach(checkbox => {
+            selectedMessageIds.add(parseInt(checkbox.value));
+        });
+        
+        // 更新选择计数
+        document.getElementById('selectedCount').textContent = selectedMessageIds.size;
+        
+        // 显示/隐藏工具栏和全选按钮
+        const batchToolbar = document.getElementById('batchToolbar');
+        const selectAllBtn = document.getElementById('selectAllBtn');
+        
+        if (checkboxes.length > 0) {
+            selectAllBtn.classList.remove('d-none');
+        } else {
+            selectAllBtn.classList.add('d-none');
+        }
+        
+        if (selectedMessageIds.size > 0) {
+            batchToolbar.classList.remove('d-none');
+        } else {
+            batchToolbar.classList.add('d-none');
+        }
+    }
+
+    // 全选/取消全选
+    function toggleSelectAll() {
+        const checkboxes = document.querySelectorAll('.message-checkbox');
+        const selectAllBtn = document.getElementById('selectAllBtn');
+        const allSelected = Array.from(checkboxes).every(cb => cb.checked);
+        
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = !allSelected;
+        });
+        
+        // 更新按钮图标
+        const icon = selectAllBtn.querySelector('i');
+        if (allSelected) {
+            icon.className = 'fas fa-square';
+            selectAllBtn.title = '全选';
+        } else {
+            icon.className = 'fas fa-check-square';
+            selectAllBtn.title = '取消全选';
+        }
+        
+        updateSelectionUI();
+    }
+
+    // 清除选择
+    function clearSelection() {
+        const checkboxes = document.querySelectorAll('.message-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        selectedMessageIds.clear();
+        updateSelectionUI();
+        
+        // 重置全选按钮
+        const selectAllBtn = document.getElementById('selectAllBtn');
+        const icon = selectAllBtn.querySelector('i');
+        icon.className = 'fas fa-check-square';
+        selectAllBtn.title = '全选';
+    }
+
+    // 批量删除选中的消息
+    function deleteSelectedMessages() {
+        if (selectedMessageIds.size === 0) {
+            showNotification('请选择要删除的消息', 'warning');
+            return;
+        }
+        
+        if (confirm(`确定要删除选中的 ${selectedMessageIds.size} 条消息吗？`)) {
+            const messageIdsArray = Array.from(selectedMessageIds);
+            
+            fetch('/api/messages/batch', {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    message_ids: messageIdsArray
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 从当前消息列表中移除已删除的消息
+                    currentMessages = currentMessages.filter(m => !selectedMessageIds.has(m.id));
+                    renderMessages(currentMessages);
+                    updateUnreadCount();
+                    
+                    // 清除选择状态
+                    clearSelection();
+                    
+                    showNotification(data.message, 'success');
+                } else {
+                    showNotification('批量删除失败: ' + (data.error || '未知错误'), 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('批量删除消息失败:', error);
+                showNotification('批量删除失败: ' + error.message, 'danger');
+            });
+        }
     }
 
     // 渲染消息列表
@@ -126,6 +259,8 @@
             const typeText = message.type === 'analysis' ? 'AI分析' : 'AI咨询';
             const unreadClass = message.is_read ? '' : 'unread-message';
             const favoriteIcon = message.is_favorite ? 'fas' : 'far';
+            // 使用北京时间显示
+            const displayTime = message.created_at_beijing || formatDateTime(message.created_at);
             
             return `
                 <div class="card mb-3 message-card ${unreadClass}" data-id="${message.id}">
@@ -133,13 +268,20 @@
                         <div class="d-flex justify-content-between align-items-start">
                             <div class="flex-grow-1">
                                 <div class="d-flex align-items-center mb-2">
+                                    <!-- 复选框 -->
+                                    <div class="form-check me-2">
+                                        <input class="form-check-input message-checkbox" 
+                                               type="checkbox" 
+                                               value="${message.id}" 
+                                               onchange="updateSelectionUI()">
+                                    </div>
                                     <i class="fas ${typeIcon} me-2 text-primary"></i>
                                     <h6 class="card-title mb-0">${message.title}</h6>
                                     <span class="badge bg-secondary ms-2">${typeText}</span>
                                     ${!message.is_read ? '<span class="badge bg-danger ms-1">未读</span>' : ''}
                                 </div>
                                 <p class="card-text text-muted">${message.content.substring(0, 100)}${message.content.length > 100 ? '...' : ''}</p>
-                                <small class="text-muted">${formatDateTime(message.created_at)}</small>
+                                <small class="text-muted">${displayTime}</small>
                             </div>
                             <div class="ms-3">
                                 <button class="btn btn-outline-warning btn-sm me-1" onclick="toggleFavoriteQuick(${message.id})" title="收藏">
@@ -305,6 +447,9 @@
         });
         event.target.classList.remove('btn-outline-primary');
         event.target.classList.add('btn-primary', 'active');
+        
+        // 清除选择状态
+        clearSelection();
         
         // 重新加载消息
         loadMessages();

@@ -132,7 +132,7 @@ class NightscoutWebMonitor:
         
     def load_config(self):
         """加载配置文件"""
-        config_path = "/app/config.toml"
+        config_path = "config.toml"
         default_config = {
             "basic": {
                 "enable": True,
@@ -180,6 +180,11 @@ class NightscoutWebMonitor:
                 "insulin_frequency": "",
                 "insulin_custom_frequency": ""
             },
+            "alert": {
+                "high_glucose_threshold": 10.0,
+                "low_glucose_threshold": 3.9,
+                "enable_email_alerts": False
+            },
             "database": {
                 "path": "data/nightscout_data.db"
             }
@@ -205,6 +210,14 @@ class NightscoutWebMonitor:
                     for key, value in default_config["treatment_plan"].items():
                         if key not in config["treatment_plan"]:
                             config["treatment_plan"][key] = value
+                
+                # 特别确保 alert 字段存在
+                if "alert" not in config:
+                    config["alert"] = default_config["alert"].copy()
+                else:
+                    for key, value in default_config["alert"].items():
+                        if key not in config["alert"]:
+                            config["alert"][key] = value
                 
                 return config
             else:
@@ -390,6 +403,7 @@ class NightscoutWebMonitor:
                     alert_status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (alert_status IN ('ACTIVE', 'ACKNOWLEDGED', 'DISMISSED')),
                     acknowledged_at TIMESTAMP,
                     notification_sent BOOLEAN DEFAULT 0,
+                    notification_time TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -403,15 +417,31 @@ class NightscoutWebMonitor:
                     enable_predictions BOOLEAN DEFAULT 1,
                     enable_alerts BOOLEAN DEFAULT 1,
                     notification_methods TEXT DEFAULT 'web',
+                    enable_email_alerts BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
+            # 为现有数据库添加新字段（如果不存在）
+            try:
+                cursor.execute("ALTER TABLE user_alert_config ADD COLUMN enable_email_alerts BOOLEAN DEFAULT 0")
+            except sqlite3.OperationalError as e:
+                # 字段可能已存在，忽略错误
+                if "duplicate column name" not in str(e).lower():
+                    logger.warning(f"添加enable_email_alerts字段时出错: {e}")
+            
+            # 添加notification_time字段到hypoglycemia_alerts表
+            try:
+                cursor.execute("ALTER TABLE hypoglycemia_alerts ADD COLUMN notification_time TIMESTAMP")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    logger.warning(f"添加notification_time字段时出错: {e}")
+            
             # 插入默认警报配置（如果不存在）
             cursor.execute("""
-                INSERT OR IGNORE INTO user_alert_config (id, high_risk_threshold_mgdl, medium_risk_threshold_mgdl, enable_predictions, enable_alerts, notification_methods)
-                VALUES (1, 70, 80, 1, 1, 'web')
+                INSERT OR IGNORE INTO user_alert_config (id, high_risk_threshold_mgdl, medium_risk_threshold_mgdl, enable_predictions, enable_alerts, notification_methods, enable_email_alerts)
+                VALUES (1, 70, 80, 1, 1, 'web', 0)
             """)
             
             conn.commit()
@@ -602,8 +632,37 @@ class NightscoutWebMonitor:
 
     async def perform_analysis_and_notify(self):
         """执行分析并发送通知"""
-        today = datetime.now().strftime('%Y-%m-%d')
+        # 获取当前时间，格式化为 YYYY-MM-DD HH:MM:SS
+        current_time = datetime.now()
+        today = current_time.strftime('%Y-%m-%d')
+        current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+        
+        logger.info(f"开始执行分析，时间范围：{today} 00:00:00 到 {current_time_str}")
+        
+        # 获取从当日00:00到当前时间的数据
         glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(today, today)
+        
+        # 过滤数据，只保留到当前时间的数据
+        if glucose_data:
+            glucose_data = [item for item in glucose_data if item.get('dateString') and 
+                          datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if treatment_data:
+            treatment_data = [item for item in treatment_data if item.get('created_at') and 
+                            datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if activity_data:
+            activity_data = [item for item in activity_data if item.get('created_at') and 
+                           datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if meter_data:
+            meter_data = [item for item in meter_data if item.get('timestamp') and 
+                        datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        logger.info(f"过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
+                   f"治疗: {len(treatment_data) if treatment_data else 0}, "
+                   f"活动: {len(activity_data) if activity_data else 0}, "
+                   f"血糖仪: {len(meter_data) if meter_data else 0}")
         
         if glucose_data:
             await self.save_glucose_data(glucose_data)
@@ -1037,6 +1096,35 @@ class NightscoutWebMonitor:
             logger.error(f"保存消息失败: {e}")
             return False
     
+    def convert_to_beijing_time(self, dt_str: str) -> str:
+        """将UTC时间字符串转换为北京时间字符串"""
+        try:
+            if not dt_str:
+                return dt_str
+            
+            # 解析UTC时间字符串
+            if 'T' in dt_str and 'Z' in dt_str:
+                # ISO格式: 2023-12-07T12:34:56Z
+                dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+            elif ' ' in dt_str and '.' in dt_str:
+                # 数据库格式: 2023-12-07 12:34:56.123456
+                dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S.%f')
+            elif ' ' in dt_str:
+                # 简单格式: 2023-12-07 12:34:56
+                dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+            else:
+                # 其他格式，尝试直接解析
+                dt = datetime.fromisoformat(dt_str)
+            
+            # 转换为北京时间（UTC+8）
+            beijing_dt = dt + timedelta(hours=8)
+            
+            # 格式化为 YYYY-MM-DD HH:MM:SS
+            return beijing_dt.strftime('%Y-%m-%d %H:%M:%S')
+        except Exception as e:
+            logger.error(f"时区转换失败: {e}, 原时间字符串: {dt_str}")
+            return dt_str
+
     def get_messages(self, message_type: Optional[str] = None, limit: int = 50) -> List[Dict]:
         """从数据库获取消息"""
         try:
@@ -1071,7 +1159,8 @@ class NightscoutWebMonitor:
                     'content': row[3],
                     'is_read': bool(row[4]),
                     'is_favorite': bool(row[5]),
-                    'created_at': row[6]
+                    'created_at': row[6],
+                    'created_at_beijing': self.convert_to_beijing_time(row[6])
                 })
             
             return messages
@@ -1129,6 +1218,33 @@ class NightscoutWebMonitor:
             return True
         except Exception as e:
             logger.error(f"删除消息失败: {e}")
+            return False
+
+    def delete_messages_batch(self, message_ids: List[int]) -> bool:
+        """批量删除消息"""
+        try:
+            if not message_ids:
+                logger.warning("批量删除消息：消息ID列表为空")
+                return False
+            
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            # 使用IN子句批量删除
+            placeholders = ','.join('?' for _ in message_ids)
+            cursor.execute(f"""
+                DELETE FROM messages
+                WHERE id IN ({placeholders})
+            """, message_ids)
+            
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"批量删除消息：成功删除 {deleted_count} 条消息")
+            return True
+        except Exception as e:
+            logger.error(f"批量删除消息失败: {e}")
             return False
     
     def get_unread_message_count(self) -> int:
@@ -2045,6 +2161,73 @@ class NightscoutWebMonitor:
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
 
+    def send_glucose_alert_notification(self, risk_assessment: Dict, alert_id: int = -1):
+        """发送血糖报警邮件通知"""
+        try:
+            # 检查是否启用了报警邮箱通知
+            alert_config = self.get_user_alert_config()
+            if not alert_config.get('enable_email_alerts', False):
+                logger.info("血糖报警邮箱通知已禁用，跳过发送")
+                return False
+                
+            # 检查是否启用了邮件通知
+            if not self.config.get("notification", {}).get("enable_email", False):
+                logger.info("邮件通知已禁用，跳过发送")
+                return False
+            
+            # 构建报警邮件内容
+            subject = f"血糖报警通知 - {risk_assessment['risk_level']}风险"
+            content = f"""
+血糖预测报警详情：
+
+预测血糖值: {risk_assessment['predicted_glucose_mmol']} mmol/L ({risk_assessment['predicted_glucose_mgdl']} mg/dL)
+风险级别: {risk_assessment['risk_level']}
+风险描述: {risk_assessment['risk_description']}
+报警时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+请及时采取措施。
+
+此邮件由糖小助自动发送
+"""
+            
+            # 发送邮件
+            success = self.send_email_notification(subject, content)
+            if success:
+                logger.info(f"血糖报警邮件发送成功 - 风险级别: {risk_assessment['risk_level']}")
+                
+                # 更新数据库中的通知状态
+                if alert_id > 0:
+                    self._mark_alert_notification_sent(alert_id)
+                    
+                return True
+            else:
+                logger.error(f"血糖报警邮件发送失败 - 风险级别: {risk_assessment['risk_level']}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"发送血糖报警邮件失败: {e}")
+            return False
+
+    def _mark_alert_notification_sent(self, alert_id: int):
+        """标记警报通知为已发送"""
+        try:
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE hypoglycemia_alerts 
+                SET notification_sent = 1, notification_time = ?
+                WHERE id = ?
+            """, (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), alert_id))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"已标记警报 {alert_id} 通知为已发送")
+            
+        except Exception as e:
+            logger.error(f"标记警报通知状态失败: {e}")
+
     def test_email_configuration(self) -> Dict[str, any]:
         """测试邮件配置"""
         try:
@@ -2873,7 +3056,7 @@ class NightscoutWebMonitor:
             logger.error(f"低血糖风险评估失败: {e}")
             raise e
 
-    def create_hypoglycemia_alert(self, risk_assessment: Dict) -> bool:
+    def create_hypoglycemia_alert(self, risk_assessment: Dict) -> int:
         """创建低血糖警报"""
         try:
             conn = sqlite3.connect(self.get_database_path())
@@ -2890,7 +3073,7 @@ class NightscoutWebMonitor:
             if existing_alert:
                 logger.info(f"已存在活跃的{risk_assessment['risk_level']}风险警报，跳过创建")
                 conn.close()
-                return False
+                return -1
             
             # 创建新警报
             cursor.execute("""
@@ -2910,11 +3093,11 @@ class NightscoutWebMonitor:
             conn.close()
             
             logger.info(f"创建低血糖警报 ID: {alert_id}, 风险级别: {risk_assessment['risk_level']}")
-            return True
+            return alert_id
             
         except Exception as e:
             logger.error(f"创建低血糖警报失败: {e}")
-            return False
+            return -1
 
     def get_user_alert_config(self) -> Dict:
         """获取用户警报配置"""
@@ -2924,7 +3107,7 @@ class NightscoutWebMonitor:
             
             cursor.execute("""
                 SELECT high_risk_threshold_mgdl, medium_risk_threshold_mgdl, 
-                       enable_predictions, enable_alerts, notification_methods
+                       enable_predictions, enable_alerts, notification_methods, enable_email_alerts
                 FROM user_alert_config 
                 WHERE id = 1
             """)
@@ -2938,7 +3121,8 @@ class NightscoutWebMonitor:
                     'medium_risk_threshold_mgdl': result[1],
                     'enable_predictions': bool(result[2]),
                     'enable_alerts': bool(result[3]),
-                    'notification_methods': result[4]
+                    'notification_methods': result[4],
+                    'enable_email_alerts': bool(result[5]) if result[5] is not None else False
                 }
             else:
                 # 返回默认配置
@@ -2947,7 +3131,8 @@ class NightscoutWebMonitor:
                     'medium_risk_threshold_mgdl': 80,
                     'enable_predictions': True,
                     'enable_alerts': True,
-                    'notification_methods': 'web'
+                    'notification_methods': 'web',
+                    'enable_email_alerts': False
                 }
                 
         except Exception as e:
@@ -2957,7 +3142,8 @@ class NightscoutWebMonitor:
                 'medium_risk_threshold_mgdl': 80,
                 'enable_predictions': True,
                 'enable_alerts': True,
-                'notification_methods': 'web'
+                'notification_methods': 'web',
+                'enable_email_alerts': False
             }
 
     def update_user_alert_config(self, config: Dict) -> bool:
@@ -2973,6 +3159,7 @@ class NightscoutWebMonitor:
                     enable_predictions = ?,
                     enable_alerts = ?,
                     notification_methods = ?,
+                    enable_email_alerts = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
             """, (
@@ -2980,7 +3167,8 @@ class NightscoutWebMonitor:
                 config.get('medium_risk_threshold_mgdl', 80),
                 1 if config.get('enable_predictions', True) else 0,
                 1 if config.get('enable_alerts', True) else 0,
-                config.get('notification_methods', 'web')
+                config.get('notification_methods', 'web'),
+                1 if config.get('enable_email_alerts', False) else 0
             ))
             
             conn.commit()
@@ -3403,6 +3591,23 @@ def api_config():
             if 'auth' in new_config and 'password' in new_config['auth']:
                 if not new_config['auth']['password']:
                     new_config['auth']['password'] = monitor.config.get('auth', {}).get('password', '')
+
+            # 处理alert配置 - 更新数据库中的警报配置
+            if 'alert' in new_config:
+                alert_config = new_config['alert']
+                # 转换mmol/L为mg/dL - 正确的阈值映射
+                high_risk_threshold_mgdl = alert_config.get('low_glucose_threshold', 3.9) * 18.0
+                medium_risk_threshold_mgdl = (alert_config.get('low_glucose_threshold', 3.9) + 0.5) * 18.0
+                
+                # 更新警报配置
+                monitor.update_user_alert_config({
+                    'high_risk_threshold_mgdl': high_risk_threshold_mgdl,
+                    'medium_risk_threshold_mgdl': medium_risk_threshold_mgdl,
+                    'enable_predictions': True,
+                    'enable_alerts': True,
+                    'notification_methods': 'web',
+                    'enable_email_alerts': alert_config.get('enable_email_alerts', False)
+                })
 
             if monitor.save_config(new_config):
                 # 重新加载调度器以应用更改
@@ -4009,6 +4214,29 @@ def api_delete_message(message_id):
         logger.error(f"删除消息失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/messages/batch', methods=['DELETE'])
+def api_delete_messages_batch():
+    """批量删除消息API"""
+    try:
+        data = request.get_json()
+        message_ids = data.get('message_ids', [])
+        
+        if not message_ids or not isinstance(message_ids, list):
+            return jsonify({'error': '缺少有效的消息ID列表'}), 400
+        
+        success = monitor.delete_messages_batch(message_ids)
+        if success:
+            return jsonify({
+                'success': True, 
+                'deleted_count': len(message_ids),
+                'message': f'成功删除 {len(message_ids)} 条消息'
+            })
+        else:
+            return jsonify({'error': '批量删除失败'}), 500
+    except Exception as e:
+        logger.error(f"批量删除消息失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/messages/unread-count', methods=['GET'])
 def api_unread_count():
     """获取未读消息数量API"""
@@ -4042,10 +4270,10 @@ def api_predict_glucose():
         
         # 如果启用了警报且风险不为LOW，创建警报
         if config.get('enable_alerts', True) and risk_assessment['risk_level'] != 'LOW':
-            alert_created = monitor.create_hypoglycemia_alert(risk_assessment)
-            if alert_created:
-                # 如果需要，可以在这里添加推送通知逻辑
-                pass
+            alert_id = monitor.create_hypoglycemia_alert(risk_assessment)
+            if alert_id > 0:
+                # 发送邮件通知
+                monitor.send_glucose_alert_notification(risk_assessment, alert_id)
         
         return jsonify({
             'prediction': prediction_result,
