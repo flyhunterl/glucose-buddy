@@ -20,6 +20,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
+from contextlib import contextmanager
+from functools import lru_cache
 
 import aiohttp
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
@@ -36,6 +38,95 @@ class NightscoutWebMonitor:
         self.config = self.load_config()
         self.init_database()
         self.setup_scheduler()
+        self._connection_pool = {}
+        self._pool_lock = threading.Lock()
+        # 添加内存缓存
+        self._cache = {}
+        self._cache_lock = threading.Lock()
+        self._cache_ttl = {}
+        
+    @contextmanager
+    def get_db_connection(self):
+        """数据库连接池管理器"""
+        thread_id = threading.get_ident()
+        conn_key = f"conn_{thread_id}"
+        
+        try:
+            with self._pool_lock:
+                if conn_key not in self._connection_pool:
+                    self._connection_pool[conn_key] = sqlite3.connect(
+                        self.get_database_path(), 
+                        check_same_thread=False,
+                        timeout=30.0
+                    )
+                    # 启用WAL模式以提高并发性能
+                    self._connection_pool[conn_key].execute("PRAGMA journal_mode=WAL")
+                    # 优化SQLite性能设置
+                    self._connection_pool[conn_key].execute("PRAGMA synchronous=NORMAL")
+                    self._connection_pool[conn_key].execute("PRAGMA cache_size=10000")
+                    self._connection_pool[conn_key].execute("PRAGMA temp_store=MEMORY")
+                    
+                conn = self._connection_pool[conn_key]
+            
+            yield conn
+            
+        except Exception as e:
+            logger.error(f"数据库连接错误: {e}")
+            raise
+        finally:
+            # 不在这里关闭连接，保持连接池
+            pass
+            
+    def cleanup_connections(self):
+        """清理数据库连接池"""
+        with self._pool_lock:
+            for conn_key, conn in self._connection_pool.items():
+                try:
+                    conn.close()
+                except:
+                    pass
+            self._connection_pool.clear()
+            
+    def _get_cache_key(self, prefix: str, *args) -> str:
+        """生成缓存键"""
+        return f"{prefix}:{':'.join(str(arg) for arg in args)}"
+    
+    def _is_cache_valid(self, key: str, ttl_seconds: int = 300) -> bool:
+        """检查缓存是否有效"""
+        if key not in self._cache_ttl:
+            return False
+        return time.time() - self._cache_ttl[key] < ttl_seconds
+    
+    def _set_cache(self, key: str, value, ttl_seconds: int = 300):
+        """设置缓存"""
+        with self._cache_lock:
+            self._cache[key] = value
+            self._cache_ttl[key] = time.time()
+    
+    def _get_cache(self, key: str, default=None):
+        """获取缓存"""
+        with self._cache_lock:
+            if self._is_cache_valid(key):
+                return self._cache[key]
+            # 清理过期缓存
+            if key in self._cache:
+                del self._cache[key]
+                del self._cache_ttl[key]
+            return default
+    
+    def _clear_cache(self, pattern: str = None):
+        """清理缓存"""
+        with self._cache_lock:
+            if pattern:
+                keys_to_remove = [k for k in self._cache.keys() if pattern in k]
+                for key in keys_to_remove:
+                    if key in self._cache:
+                        del self._cache[key]
+                    if key in self._cache_ttl:
+                        del self._cache_ttl[key]
+            else:
+                self._cache.clear()
+                self._cache_ttl.clear()
         
     def load_config(self):
         """加载配置文件"""
@@ -162,7 +253,7 @@ class NightscoutWebMonitor:
             conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
-            # 创建血糖数据表
+            # 创建血糖数据表 - 性能优化版本
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS glucose_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,8 +266,14 @@ class NightscoutWebMonitor:
                     UNIQUE(date_string)
                 )
             """)
+            
+            # 创建性能优化索引
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_glucose_shanghai_time ON glucose_data(shanghai_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_glucose_date_string ON glucose_data(date_string)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_glucose_created_at ON glucose_data(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_glucose_sgv ON glucose_data(sgv)")
 
-            # 创建治疗数据表
+            # 创建治疗数据表 - 性能优化版本
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS treatment_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,8 +290,13 @@ class NightscoutWebMonitor:
                     UNIQUE(date_string, event_type, carbs, protein, fat)
                 )
             """)
+            
+            # 创建治疗数据性能优化索引
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_treatment_shanghai_time ON treatment_data(shanghai_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_treatment_event_type ON treatment_data(event_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_treatment_created_at ON treatment_data(created_at)")
 
-            # 创建运动数据表
+            # 创建运动数据表 - 性能优化版本
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS activity_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,8 +309,13 @@ class NightscoutWebMonitor:
                     UNIQUE(date_string, event_type, duration)
                 )
             """)
+            
+            # 创建运动数据性能优化索引
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_shanghai_time ON activity_data(shanghai_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_event_type ON activity_data(event_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity_data(created_at)")
 
-            # 创建指尖血糖数据表
+            # 创建指尖血糖数据表 - 性能优化版本
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS meter_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -219,6 +326,11 @@ class NightscoutWebMonitor:
                     UNIQUE(date_string)
                 )
             """)
+            
+            # 创建指尖血糖数据性能优化索引
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_meter_shanghai_time ON meter_data(shanghai_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_meter_sgv ON meter_data(sgv)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_meter_created_at ON meter_data(created_at)")
             
             # 创建用户订阅表（用于Web推送）
             cursor.execute("""
@@ -245,7 +357,7 @@ class NightscoutWebMonitor:
                 )
             """)
             
-            # 创建预测结果表
+            # 创建预测结果表 - 性能优化版本
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS prediction_results (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +370,12 @@ class NightscoutWebMonitor:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # 创建预测结果性能优化索引
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_prediction_time ON prediction_results(prediction_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_prediction_confidence ON prediction_results(confidence_score)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_prediction_created_at ON prediction_results(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_prediction_algorithm ON prediction_results(algorithm_used)")
             
             # 创建低血糖警报表
             cursor.execute("""
@@ -555,8 +673,12 @@ class NightscoutWebMonitor:
                     logger.error(f"保存血糖数据项失败: {e}")
 
             conn.commit()
-            conn.close()
+            # 连接会自动返回到连接池
             logger.info(f"保存了 {saved_count} 条新的血糖数据")
+            
+            # 清除相关缓存
+            if saved_count > 0:
+                self._clear_cache("glucose_data")
 
         except Exception as e:
             logger.error(f"保存血糖数据失败: {e}")
@@ -689,36 +811,50 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"保存指尖血糖数据失败: {e}")
 
-    def get_glucose_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
-        """从数据库获取血糖数据"""
+    def get_glucose_data_from_db(self, days: int = 7, start_date: Optional[str] = None, end_date: Optional[str] = None, limit: Optional[int] = None, offset: int = 0, use_cache: bool = True) -> List[Dict]:
+        """从数据库获取血糖数据 - 性能优化版本"""
+        # 生成缓存键
+        cache_key = self._get_cache_key("glucose_data", days, start_date, end_date, limit, offset)
+        
+        # 尝试从缓存获取数据
+        if use_cache:
+            cached_data = self._get_cache(cache_key)
+            if cached_data is not None:
+                return cached_data
+        
         try:
-            conn = sqlite3.connect(self.get_database_path())
-            cursor = conn.cursor()
+            with self.get_db_connection() as conn:
+                cursor = conn.cursor()
 
-            if start_date and end_date:
-                # 确保结束日期包含全天
-                end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-                end_date_str = end_date_dt.strftime('%Y-%m-%d')
-                query = """
-                    SELECT date_string, shanghai_time, sgv, direction, trend
-                    FROM glucose_data
-                    WHERE shanghai_time >= ? AND shanghai_time < ?
-                    ORDER BY date_string DESC
-                """
-                params = (start_date, end_date_str)
-            else:
-                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
-                query = """
-                    SELECT date_string, shanghai_time, sgv, direction, trend
-                    FROM glucose_data
-                    WHERE shanghai_time >= ?
-                    ORDER BY date_string DESC
-                """
-                params = (start_date_str,)
+                if start_date and end_date:
+                    # 确保结束日期包含全天
+                    end_date_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+                    end_date_str = end_date_dt.strftime('%Y-%m-%d')
+                    query = """
+                        SELECT date_string, shanghai_time, sgv, direction, trend
+                        FROM glucose_data
+                        WHERE shanghai_time >= ? AND shanghai_time < ?
+                        ORDER BY date_string DESC
+                    """
+                    params = (start_date, end_date_str)
+                else:
+                    start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                    query = """
+                        SELECT date_string, shanghai_time, sgv, direction, trend
+                        FROM glucose_data
+                        WHERE shanghai_time >= ?
+                        ORDER BY date_string DESC
+                    """
+                    params = (start_date_str,)
+                    
+                # 添加分页支持
+                if limit is not None:
+                    query += " LIMIT ? OFFSET ?"
+                    params = params + (limit, offset)
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            conn.close()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                # 连接会自动返回到连接池
 
             glucose_data = []
             for row in rows:
@@ -729,6 +865,10 @@ class NightscoutWebMonitor:
                     "direction": row[3],
                     "trend": row[4]
                 })
+            
+            # 缓存结果（5分钟TTL）
+            if use_cache and glucose_data:
+                self._set_cache(cache_key, glucose_data, ttl_seconds=300)
 
             return glucose_data
 

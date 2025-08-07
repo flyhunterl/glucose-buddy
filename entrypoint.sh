@@ -90,6 +90,26 @@ if [ "${FLASK_ENV}" = "development" ]; then
     exec python app.py
 else
     echo "🚀 以生产模式启动应用..."
-    # 使用gunicorn启动，支持SocketIO
-    exec gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:1338 --timeout 120 --keep-alive 2 --max-requests 1000 --max-requests-jitter 100 app:app
+    # 性能优化的gunicorn配置
+    WORKERS=${GUNICORN_WORKERS:-2}
+    TIMEOUT=${GUNICORN_TIMEOUT:-120}
+    MAX_REQUESTS=${GUNICORN_MAX_REQUESTS:-1000}
+    KEEP_ALIVE=${GUNICORN_KEEP_ALIVE:-2}
+    
+    echo "📊 性能配置: Workers=${WORKERS}, Timeout=${TIMEOUT}s, MaxRequests=${MAX_REQUESTS}"
+    
+    # 使用gunicorn启动，支持SocketIO，优化并发性能
+    exec gunicorn \
+        --worker-class eventlet \
+        -w ${WORKERS} \
+        --bind 0.0.0.0:1338 \
+        --timeout ${TIMEOUT} \
+        --keep-alive ${KEEP_ALIVE} \
+        --max-requests ${MAX_REQUESTS} \
+        --max-requests-jitter 100 \
+        --worker-tmp-dir /dev/shm \
+        --access-logfile - \
+        --error-logfile - \
+        --log-level info \
+        app:app
 fi
