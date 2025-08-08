@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nightscout-web-monitor
+    container_name: glucosebuddy
     restart: unless-stopped
     ports:
       - "1338:1338"
