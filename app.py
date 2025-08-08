@@ -514,7 +514,7 @@ class NightscoutWebMonitor:
         return round(mg_dl / 18.0, 1)
 
     def utc_to_shanghai_time(self, utc_time_str: str) -> str:
-        """将UTC时间字符串转换为上海时间字符串"""
+        """将UTC时间字符串转换为配置的时区时间字符串"""
         try:
             if not utc_time_str:
                 return ""
@@ -527,9 +527,28 @@ class NightscoutWebMonitor:
             else:
                 utc_dt = datetime.fromisoformat(utc_time_str).replace(tzinfo=timezone.utc)
 
-            shanghai_tz = timezone(timedelta(hours=8))
-            shanghai_dt = utc_dt.astimezone(shanghai_tz)
-            return shanghai_dt.strftime('%Y-%m-%d %H:%M:%S')
+            # 从配置读取时区偏移，默认为UTC+8（北京时间）
+            timezone_offset = 8  # 默认值
+            try:
+                if hasattr(self, 'config') and isinstance(self.config, dict):
+                    if "basic" in self.config and isinstance(self.config["basic"], dict):
+                        offset_config = self.config["basic"].get("timezone_offset", 8)
+                        # 验证时区偏移值的有效性（-12到14之间）
+                        if isinstance(offset_config, (int, float)) and -12 <= offset_config <= 14:
+                            timezone_offset = offset_config
+                        else:
+                            logger.warning(f"无效的时区偏移配置: {offset_config}，使用默认值UTC+8")
+                    else:
+                        logger.warning("配置中缺少basic节，使用默认时区偏移UTC+8")
+                else:
+                    logger.warning("配置对象无效，使用默认时区偏移UTC+8")
+            except Exception as config_error:
+                logger.error(f"读取时区配置失败: {config_error}，使用默认值UTC+8")
+
+            # 使用配置的时区偏移
+            target_tz = timezone(timedelta(hours=timezone_offset))
+            target_dt = utc_dt.astimezone(target_tz)
+            return target_dt.strftime('%Y-%m-%d %H:%M:%S')
 
         except Exception as e:
             logger.error(f"时区转换失败: {utc_time_str}, 错误: {e}")
@@ -1136,7 +1155,7 @@ class NightscoutWebMonitor:
             return False
     
     def convert_to_beijing_time(self, dt_str: str) -> str:
-        """将UTC时间字符串转换为北京时间字符串"""
+        """将UTC时间字符串转换为配置的时区时间字符串"""
         try:
             if not dt_str:
                 return dt_str
@@ -1155,11 +1174,29 @@ class NightscoutWebMonitor:
                 # 其他格式，尝试直接解析
                 dt = datetime.fromisoformat(dt_str)
             
-            # 转换为北京时间（UTC+8）
-            beijing_dt = dt + timedelta(hours=8)
+            # 从配置读取时区偏移，默认为UTC+8（北京时间）
+            timezone_offset = 8  # 默认值
+            try:
+                if hasattr(self, 'config') and isinstance(self.config, dict):
+                    if "basic" in self.config and isinstance(self.config["basic"], dict):
+                        offset_config = self.config["basic"].get("timezone_offset", 8)
+                        # 验证时区偏移值的有效性（-12到14之间）
+                        if isinstance(offset_config, (int, float)) and -12 <= offset_config <= 14:
+                            timezone_offset = offset_config
+                        else:
+                            logger.warning(f"无效的时区偏移配置: {offset_config}，使用默认值UTC+8")
+                    else:
+                        logger.warning("配置中缺少basic节，使用默认时区偏移UTC+8")
+                else:
+                    logger.warning("配置对象无效，使用默认时区偏移UTC+8")
+            except Exception as config_error:
+                logger.error(f"读取时区配置失败: {config_error}，使用默认值UTC+8")
+            
+            # 使用配置的时区偏移进行转换
+            target_dt = dt + timedelta(hours=timezone_offset)
             
             # 格式化为 YYYY-MM-DD HH:MM:SS
-            return beijing_dt.strftime('%Y-%m-%d %H:%M:%S')
+            return target_dt.strftime('%Y-%m-%d %H:%M:%S')
         except Exception as e:
             logger.error(f"时区转换失败: {e}, 原时间字符串: {dt_str}")
             return dt_str
