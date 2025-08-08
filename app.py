@@ -3047,11 +3047,16 @@ class NightscoutWebMonitor:
             }
 
     def predict_glucose(self, glucose_data: List[Dict]) -> Dict:
-        """预测血糖值 - 基于当前血糖值的趋势外推算法"""
+        """预测血糖值 - 增强版算法，整合数据质量评分、动态权重和改进置信度模型"""
         try:
-            # 数据验证
-            if len(glucose_data) < 10:
-                raise ValueError("数据点不足，至少需要10个数据点")
+            # 1. 数据质量评估
+            quality_assessment = self.calculate_data_quality_score(glucose_data)
+            
+            # 基于质量等级调整数据要求
+            min_data_points = self._get_min_data_points_based_on_quality(quality_assessment['quality_level'])
+            if len(glucose_data) < min_data_points:
+                quality_msg = quality_assessment.get('warning_message', '数据质量不足')
+                raise ValueError(f"{quality_msg}，至少需要{min_data_points}个数据点")
             
             # 验证数据时间范围（1-7天）
             if glucose_data:
@@ -3081,9 +3086,12 @@ class NightscoutWebMonitor:
             # 按时间排序（从旧到新）
             sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
             
+            # 2. 数据预处理和异常值过滤
+            cleaned_data = self._preprocess_glucose_data(sorted_data, quality_assessment)
+            
             # 获取当前血糖值（最新的血糖值）
             current_glucose_mgdl = None
-            for entry in reversed(sorted_data):
+            for entry in reversed(cleaned_data):
                 sgv = entry.get('sgv', 0)
                 if sgv > 0:
                     current_glucose_mgdl = sgv
@@ -3092,79 +3100,257 @@ class NightscoutWebMonitor:
             if current_glucose_mgdl is None:
                 raise ValueError("无法获取当前血糖值")
             
-            # 获取最近的血糖值用于趋势计算（最近10个数据点）
+            # 获取最近的血糖值用于趋势计算（最近15个数据点，比原来更多）
             recent_glucose_values = []
-            for entry in sorted_data[-10:]:
+            data_quality_scores = []
+            
+            for entry in cleaned_data[-15:]:
                 sgv = entry.get('sgv', 0)
                 if sgv > 0:
                     recent_glucose_values.append(sgv)
+                    # 计算每个数据点的质量分数
+                    data_quality_scores.append(self._calculate_individual_data_quality(entry, cleaned_data))
             
             if len(recent_glucose_values) < 5:
                 raise ValueError("有效的血糖数据点不足")
             
-            # 趋势计算（使用最近5-10个数据点）
-            trend_values = recent_glucose_values[-5:] if len(recent_glucose_values) >= 5 else recent_glucose_values
-            if len(trend_values) >= 2:
-                # 计算变化率
-                changes = []
-                for i in range(1, len(trend_values)):
-                    change = trend_values[i] - trend_values[i-1]
-                    changes.append(change)
-                
-                avg_change = sum(changes) / len(changes)
-                
-                # 生成未来30分钟内的预测点（每5分钟一个，共6个点）
-                prediction_points = []
-                
-                for i in range(1, 7):  # 5, 10, 15, 20, 25, 30分钟
-                    projected_change = avg_change * i
-                    predicted_value = current_glucose_mgdl + projected_change
-                    prediction_points.append({
-                        'minutes_ahead': i * 5,
-                        'predicted_glucose_mgdl': round(predicted_value, 1),
-                        'predicted_glucose_mmol': round(predicted_value / 18.0, 1)
-                    })
-                
-                predicted_glucose_mgdl = prediction_points[-1]['predicted_glucose_mgdl']
-            else:
-                # 如果没有足够数据计算趋势，使用当前血糖值作为预测
-                predicted_glucose_mgdl = current_glucose_mgdl
-                avg_change = 0
-                prediction_points = []
+            # 3. 基于数据质量和新鲜度的动态权重趋势计算
+            trend_calculation = self._calculate_enhanced_trend(
+                recent_glucose_values, data_quality_scores, quality_assessment
+            )
             
-            # 计算置信度（基于数据点数量和趋势一致性）
-            data_points_factor = min(len(recent_glucose_values) / 10, 1.0)
+            avg_change = trend_calculation['avg_change']
+            trend_weights = trend_calculation['weights']
+            trend_confidence = trend_calculation['trend_confidence']
             
-            # 趋势一致性因子（变化的标准差）
-            if len(changes) > 1:
-                variance = sum((x - avg_change) ** 2 for x in changes) / len(changes)
-                std_dev = variance ** 0.5
-                trend_consistency = max(0, 1 - (std_dev / abs(avg_change)) if avg_change != 0 else 1)
-            else:
-                trend_consistency = 0.5
+            # 4. 生成未来30分钟内的预测点（每5分钟一个，共6个点）
+            prediction_points = []
             
-            confidence_score = round((data_points_factor * 0.6 + trend_consistency * 0.4) * 100, 1)
+            for i in range(1, 7):  # 5, 10, 15, 20, 25, 30分钟
+                # 使用动态权重和趋势置信度调整预测
+                projected_change = avg_change * i * trend_confidence
+                predicted_value = current_glucose_mgdl + projected_change
+                prediction_points.append({
+                    'minutes_ahead': i * 5,
+                    'predicted_glucose_mgdl': round(predicted_value, 1),
+                    'predicted_glucose_mmol': round(predicted_value / 18.0, 1),
+                    'confidence_adjustment': trend_confidence
+                })
             
-            # 单位转换
+            predicted_glucose_mgdl = prediction_points[-1]['predicted_glucose_mgdl']
+            
+            # 5. 改进的置信度计算模型
+            enhanced_confidence = self._calculate_enhanced_confidence(
+                recent_glucose_values,
+                data_quality_scores,
+                quality_assessment,
+                trend_confidence,
+                current_glucose_mgdl,
+                glucose_data
+            )
+            
+            # 6. 单位转换
             predicted_glucose_mmol = round(predicted_glucose_mgdl / 18.0, 1)
             current_glucose_mmol = round(current_glucose_mgdl / 18.0, 1)
             
-            return {
+            prediction_result = {
                 'predicted_glucose_mgdl': round(predicted_glucose_mgdl, 1),
                 'predicted_glucose_mmol': predicted_glucose_mmol,
                 'current_glucose_mgdl': current_glucose_mgdl,
                 'current_glucose_mmol': current_glucose_mmol,
-                'confidence_score': confidence_score,
+                'confidence_score': enhanced_confidence['final_score'],
                 'trend_rate': round(avg_change, 2),
-                'algorithm_used': 'current_value_trend_extrapolation',
+                'algorithm_used': 'enhanced_dynamic_weight_trend_extrapolation',
                 'data_points_count': len(recent_glucose_values),
                 'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'prediction_points': prediction_points
+                'prediction_points': prediction_points,
+                'quality_assessment': quality_assessment,
+                'confidence_breakdown': enhanced_confidence,
+                'trend_weights': trend_weights
+            }
+            
+            # 7. 预测结果校验
+            validation_result = self.validate_prediction_result(prediction_result, glucose_data)
+            prediction_result['validation_result'] = validation_result
+            
+            # 如果校验失败，调整预测结果
+            if not validation_result['is_valid']:
+                logger.warning(f"预测结果校验失败: {validation_result['warnings']}")
+                # 基于校验结果调整置信度
+                prediction_result['confidence_score'] *= 0.7
+                prediction_result['validation_warnings'] = validation_result['warnings']
+            
+            return prediction_result
+            
+        except Exception as e:
+            logger.error(f"增强版血糖预测失败: {e}")
+            raise e
+
+    def calculate_data_quality_score(self, glucose_data: List[Dict]) -> Dict:
+        """计算数据质量评分 - 基于及时性和一致性"""
+        try:
+            if not glucose_data or len(glucose_data) < 5:
+                return {
+                    'overall_score': 0.0,
+                    'timeliness_score': 0.0,
+                    'consistency_score': 0.0,
+                    'quality_level': 'CRITICAL',
+                    'warning_message': '数据点不足，无法进行质量评估'
+                }
+            
+            # 按时间排序
+            sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
+            
+            # 1. 及时性评分 (Timeliness Score)
+            timeliness_score = self._calculate_timeliness_score(sorted_data)
+            
+            # 2. 一致性评分 (Consistency Score)
+            consistency_score = self._calculate_consistency_score(sorted_data)
+            
+            # 3. 综合评分
+            overall_score = (timeliness_score * 0.4 + consistency_score * 0.6)
+            
+            # 4. 质量等级和阈值
+            quality_level, warning_message = self._determine_quality_level(overall_score)
+            
+            return {
+                'overall_score': round(overall_score, 2),
+                'timeliness_score': round(timeliness_score, 2),
+                'consistency_score': round(consistency_score, 2),
+                'quality_level': quality_level,
+                'warning_message': warning_message,
+                'data_points_count': len(sorted_data)
             }
             
         except Exception as e:
-            logger.error(f"血糖预测失败: {e}")
-            raise e
+            logger.error(f"计算数据质量评分失败: {e}")
+            return {
+                'overall_score': 0.0,
+                'timeliness_score': 0.0,
+                'consistency_score': 0.0,
+                'quality_level': 'CRITICAL',
+                'warning_message': f'质量评估失败: {str(e)}'
+            }
+    
+    def _calculate_timeliness_score(self, sorted_data: List[Dict]) -> float:
+        """计算及时性评分"""
+        try:
+            if not sorted_data:
+                return 0.0
+            
+            current_time = datetime.now()
+            time_gaps = []
+            
+            for i in range(len(sorted_data) - 1):
+                current_time_str = sorted_data[i].get('shanghai_time', '')
+                next_time_str = sorted_data[i + 1].get('shanghai_time', '')
+                
+                if current_time_str and next_time_str:
+                    try:
+                        current_dt = datetime.strptime(current_time_str, '%Y-%m-%d %H:%M:%S')
+                        next_dt = datetime.strptime(next_time_str, '%Y-%m-%d %H:%M:%S')
+                        gap_minutes = (next_dt - current_dt).total_seconds() / 60
+                        time_gaps.append(gap_minutes)
+                    except ValueError:
+                        continue
+            
+            if not time_gaps:
+                return 0.0
+            
+            # 理想时间间隔是5分钟
+            ideal_gap = 5.0
+            avg_gap = sum(time_gaps) / len(time_gaps)
+            
+            # 计算及时性分数 (0-100)
+            # 时间间隔越接近5分钟，分数越高
+            gap_ratio = min(ideal_gap / avg_gap, avg_gap / ideal_gap) if avg_gap > 0 else 0
+            timeliness_score = max(0, min(100, gap_ratio * 100))
+            
+            # 考虑数据新鲜度
+            latest_time_str = sorted_data[-1].get('shanghai_time', '')
+            if latest_time_str:
+                try:
+                    latest_dt = datetime.strptime(latest_time_str, '%Y-%m-%d %H:%M:%S')
+                    freshness_minutes = (current_time - latest_dt).total_seconds() / 60
+                    
+                    # 数据超过30分钟开始扣分
+                    if freshness_minutes > 30:
+                        freshness_penalty = min(50, (freshness_minutes - 30) / 30 * 10)
+                        timeliness_score = max(0, timeliness_score - freshness_penalty)
+                except ValueError:
+                    timeliness_score *= 0.8
+            
+            return timeliness_score
+            
+        except Exception as e:
+            logger.error(f"计算及时性评分失败: {e}")
+            return 0.0
+    
+    def _calculate_consistency_score(self, sorted_data: List[Dict]) -> float:
+        """计算一致性评分"""
+        try:
+            if not sorted_data:
+                return 0.0
+            
+            glucose_values = []
+            for entry in sorted_data:
+                sgv = entry.get('sgv', 0)
+                if sgv > 0:
+                    glucose_values.append(sgv)
+            
+            if len(glucose_values) < 3:
+                return 0.0
+            
+            # 1. 计算变化率的一致性
+            changes = []
+            for i in range(1, len(glucose_values)):
+                change = abs(glucose_values[i] - glucose_values[i-1])
+                changes.append(change)
+            
+            if not changes:
+                return 50.0
+            
+            avg_change = sum(changes) / len(changes)
+            
+            # 2. 检测异常变化
+            # 血糖变化率一般不会超过10 mg/dL每5分钟
+            max_reasonable_change = 10.0
+            anomalies = sum(1 for change in changes if change > max_reasonable_change)
+            anomaly_ratio = anomalies / len(changes)
+            
+            # 3. 计算变化的一致性（标准差）
+            if len(changes) > 1:
+                variance = sum((x - avg_change) ** 2 for x in changes) / len(changes)
+                std_dev = variance ** 0.5
+                coefficient_of_variation = std_dev / avg_change if avg_change > 0 else 0
+                
+                # 变异系数越小，一致性越高
+                consistency_factor = max(0, 1 - coefficient_of_variation)
+            else:
+                consistency_factor = 1.0
+            
+            # 4. 综合一致性评分
+            anomaly_penalty = anomaly_ratio * 50  # 最多扣50分
+            consistency_score = max(0, consistency_factor * 100 - anomaly_penalty)
+            
+            return consistency_score
+            
+        except Exception as e:
+            logger.error(f"计算一致性评分失败: {e}")
+            return 0.0
+    
+    def _determine_quality_level(self, overall_score: float) -> tuple:
+        """确定质量等级和警告信息"""
+        if overall_score >= 85:
+            return 'EXCELLENT', '数据质量优秀'
+        elif overall_score >= 70:
+            return 'GOOD', '数据质量良好'
+        elif overall_score >= 50:
+            return 'FAIR', '数据质量一般，需要关注'
+        elif overall_score >= 30:
+            return 'POOR', '数据质量较差，建议检查数据源'
+        else:
+            return 'CRITICAL', '数据质量严重不足，预测可能不准确'
 
     def save_prediction_result(self, prediction_data: Dict) -> bool:
         """保存预测结果到数据库"""
@@ -3283,6 +3469,698 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"创建低血糖警报失败: {e}")
             return -1
+
+    def validate_prediction_result(self, prediction_data: Dict, glucose_data: List[Dict]) -> Dict:
+        """预测结果校验机制 - 趋势一致性和历史准确率对比"""
+        try:
+            predicted_glucose = prediction_data.get('predicted_glucose_mgdl', 0)
+            current_glucose = prediction_data.get('current_glucose_mgdl', 0)
+            confidence_score = prediction_data.get('confidence_score', 0)
+            
+            validation_results = {
+                'is_valid': True,
+                'validation_score': 100.0,
+                'validation_flags': [],
+                'warnings': [],
+                'trend_consistency': 0.0,
+                'historical_accuracy': 0.0,
+                'physiological_plausibility': 0.0
+            }
+            
+            # 1. 趋势一致性检查
+            trend_consistency = self._check_trend_consistency(prediction_data, glucose_data)
+            validation_results['trend_consistency'] = trend_consistency['score']
+            
+            if trend_consistency['score'] < 60:
+                validation_results['is_valid'] = False
+                validation_results['validation_flags'].append('trend_inconsistency')
+                validation_results['warnings'].append(trend_consistency['warning'])
+            
+            # 2. 历史准确率对比
+            historical_accuracy = self._check_historical_accuracy(predicted_glucose, glucose_data)
+            validation_results['historical_accuracy'] = historical_accuracy['score']
+            
+            if historical_accuracy['score'] < 50:
+                validation_results['validation_flags'].append('historical_inaccuracy')
+                validation_results['warnings'].append(historical_accuracy['warning'])
+            
+            # 3. 生理合理性检查
+            physiological_check = self._check_physiological_plausibility(
+                predicted_glucose, current_glucose, glucose_data
+            )
+            validation_results['physiological_plausibility'] = physiological_check['score']
+            
+            if physiological_check['score'] < 70:
+                validation_results['is_valid'] = False
+                validation_results['validation_flags'].append('physiological_implausibility')
+                validation_results['warnings'].append(physiological_check['warning'])
+            
+            # 4. 计算综合验证分数
+            weights = {
+                'trend_consistency': 0.4,
+                'historical_accuracy': 0.3,
+                'physiological_plausibility': 0.3
+            }
+            
+            validation_results['validation_score'] = (
+                validation_results['trend_consistency'] * weights['trend_consistency'] +
+                validation_results['historical_accuracy'] * weights['historical_accuracy'] +
+                validation_results['physiological_plausibility'] * weights['physiological_plausibility']
+            )
+            
+            # 5. 基于置信度调整
+            if confidence_score < 50:
+                validation_results['validation_score'] *= 0.8
+                validation_results['warnings'].append('预测置信度过低')
+            
+            return validation_results
+            
+        except Exception as e:
+            logger.error(f"预测结果校验失败: {e}")
+            return {
+                'is_valid': False,
+                'validation_score': 0.0,
+                'validation_flags': ['validation_error'],
+                'warnings': [f'校验过程出错: {str(e)}'],
+                'trend_consistency': 0.0,
+                'historical_accuracy': 0.0,
+                'physiological_plausibility': 0.0
+            }
+    
+    def _check_trend_consistency(self, prediction_data: Dict, glucose_data: List[Dict]) -> Dict:
+        """检查趋势一致性"""
+        try:
+            if not glucose_data or len(glucose_data) < 5:
+                return {
+                    'score': 0.0,
+                    'warning': '数据点不足，无法进行趋势一致性检查'
+                }
+            
+            # 获取最近的血糖值和趋势
+            sorted_data = sorted(glucose_data, key=lambda x: x.get('shanghai_time', ''))
+            recent_values = []
+            for entry in sorted_data[-10:]:
+                sgv = entry.get('sgv', 0)
+                if sgv > 0:
+                    recent_values.append(sgv)
+            
+            if len(recent_values) < 5:
+                return {
+                    'score': 50.0,
+                    'warning': '有效数据点不足，趋势分析受限'
+                }
+            
+            # 计算当前趋势
+            recent_trend = self._calculate_trend(recent_values[-5:])
+            predicted_glucose = prediction_data.get('predicted_glucose_mgdl', 0)
+            current_glucose = prediction_data.get('current_glucose_mgdl', 0)
+            
+            # 预测的趋势
+            predicted_trend = predicted_glucose - current_glucose
+            
+            # 比较趋势一致性
+            if abs(recent_trend - predicted_trend) <= 2:
+                trend_score = 100.0
+            elif abs(recent_trend - predicted_trend) <= 5:
+                trend_score = 80.0
+            elif abs(recent_trend - predicted_trend) <= 10:
+                trend_score = 60.0
+            else:
+                trend_score = 30.0
+            
+            warning_msg = None
+            if trend_score < 60:
+                direction = "上升" if predicted_trend > 0 else "下降"
+                warning_msg = f"预测趋势与近期趋势不一致，预测血糖{direction}过快"
+            
+            return {
+                'score': trend_score,
+                'warning': warning_msg or '趋势一致性良好'
+            }
+            
+        except Exception as e:
+            logger.error(f"趋势一致性检查失败: {e}")
+            return {
+                'score': 0.0,
+                'warning': f'趋势检查失败: {str(e)}'
+            }
+    
+    def _check_historical_accuracy(self, predicted_glucose: float, glucose_data: List[Dict]) -> Dict:
+        """检查历史准确率"""
+        try:
+            # 获取最近的预测结果进行对比
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            # 获取最近24小时的历史预测
+            cursor.execute("""
+                SELECT predicted_glucose_mgdl, prediction_time 
+                FROM prediction_results 
+                WHERE prediction_time >= datetime('now', '-1 day')
+                ORDER BY prediction_time DESC LIMIT 10
+            """)
+            
+            historical_predictions = cursor.fetchall()
+            conn.close()
+            
+            if not historical_predictions:
+                return {
+                    'score': 70.0,
+                    'warning': '暂无历史预测数据用于对比'
+                }
+            
+            # 计算历史预测的准确率
+            accuracy_scores = []
+            for pred_mgdl, pred_time in historical_predictions:
+                # 找到预测时间附近的实际血糖值
+                actual_glucose = self._find_actual_glucose_at_time(pred_time, glucose_data)
+                if actual_glucose > 0:
+                    error_percentage = abs(pred_mgdl - actual_glucose) / actual_glucose * 100
+                    accuracy = max(0, 100 - error_percentage)
+                    accuracy_scores.append(accuracy)
+            
+            if not accuracy_scores:
+                return {
+                    'score': 60.0,
+                    'warning': '无法找到对应的实际血糖值进行对比'
+                }
+            
+            avg_accuracy = sum(accuracy_scores) / len(accuracy_scores)
+            
+            warning_msg = None
+            if avg_accuracy < 60:
+                warning_msg = f'历史预测准确率较低 ({avg_accuracy:.1f}%)，本次预测可能不可靠'
+            elif avg_accuracy < 80:
+                warning_msg = f'历史预测准确率一般 ({avg_accuracy:.1f}%)'
+            
+            return {
+                'score': avg_accuracy,
+                'warning': warning_msg or '历史预测准确率良好'
+            }
+            
+        except Exception as e:
+            logger.error(f"历史准确率检查失败: {e}")
+            return {
+                'score': 50.0,
+                'warning': f'历史准确率检查失败: {str(e)}'
+            }
+    
+    def _check_physiological_plausibility(self, predicted_glucose: float, current_glucose: float, glucose_data: List[Dict]) -> Dict:
+        """检查生理合理性"""
+        try:
+            glucose_change = predicted_glucose - current_glucose
+            abs_change = abs(glucose_change)
+            
+            # 生理合理性评分
+            plausibility_score = 100.0
+            warning_msg = None
+            
+            # 1. 检查血糖值范围
+            if predicted_glucose < 20 or predicted_glucose > 600:
+                plausibility_score = 0.0
+                warning_msg = '预测血糖值超出生理可能范围'
+                return {
+                    'score': plausibility_score,
+                    'warning': warning_msg
+                }
+            
+            # 2. 检查30分钟内变化幅度
+            # 血糖在30分钟内一般不会变化超过50 mg/dL
+            if abs_change > 50:
+                plausibility_score = 20.0
+                warning_msg = '预测血糖变化幅度过大，超出生理正常范围'
+            elif abs_change > 30:
+                plausibility_score = 50.0
+                warning_msg = '预测血糖变化幅度较大，需要谨慎对待'
+            elif abs_change > 20:
+                plausibility_score = 80.0
+                warning_msg = '预测血糖变化幅度中等'
+            
+            # 3. 检查极端值
+            if predicted_glucose < 40:
+                plausibility_score = min(plausibility_score, 30.0)
+                warning_msg = warning_msg or '预测血糖值极低，存在严重风险'
+            elif predicted_glucose < 70:
+                plausibility_score = min(plausibility_score, 70.0)
+                warning_msg = warning_msg or '预测血糖值偏低，需要关注'
+            elif predicted_glucose > 250:
+                plausibility_score = min(plausibility_score, 80.0)
+                warning_msg = warning_msg or '预测血糖值偏高，需要关注'
+            
+            # 4. 考虑当前血糖水平对变化幅度的影响
+            # 高血糖时变化幅度可能更大
+            if current_glucose > 200:
+                plausibility_score = min(100.0, plausibility_score * 1.2)
+            elif current_glucose < 80:
+                # 低血糖时大幅变化更危险
+                if abs_change > 15:
+                    plausibility_score = min(plausibility_score, 60.0)
+            
+            return {
+                'score': min(100.0, max(0.0, plausibility_score)),
+                'warning': warning_msg or '生理合理性检查通过'
+            }
+            
+        except Exception as e:
+            logger.error(f"生理合理性检查失败: {e}")
+            return {
+                'score': 0.0,
+                'warning': f'生理合理性检查失败: {str(e)}'
+            }
+    
+    def _calculate_trend(self, values: List[float]) -> float:
+        """计算趋势值"""
+        if len(values) < 2:
+            return 0.0
+        
+        # 使用线性回归计算趋势
+        x = list(range(len(values)))
+        y = values
+        
+        n = len(x)
+        sum_x = sum(x)
+        sum_y = sum(y)
+        sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+        sum_x2 = sum(xi * xi for xi in x)
+        
+        if n * sum_x2 - sum_x * sum_x == 0:
+            return 0.0
+        
+        slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x)
+        return slope
+    
+    def _find_actual_glucose_at_time(self, prediction_time: str, glucose_data: List[Dict]) -> float:
+        """找到指定时间附近的实际血糖值"""
+        try:
+            pred_dt = datetime.strptime(prediction_time, '%Y-%m-%d %H:%M:%S')
+            
+            for entry in glucose_data:
+                time_str = entry.get('shanghai_time', '')
+                if time_str:
+                    try:
+                        entry_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        time_diff = abs((entry_dt - pred_dt).total_seconds() / 60)  # 分钟
+                        
+                        # 寻找10分钟内的实际血糖值
+                        if time_diff <= 10:
+                            return entry.get('sgv', 0)
+                    except ValueError:
+                        continue
+            
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"查找实际血糖值失败: {e}")
+            return 0.0
+
+    def _get_min_data_points_based_on_quality(self, quality_level: str) -> int:
+        """根据数据质量等级确定最少数据点要求"""
+        quality_requirements = {
+            'EXCELLENT': 5,
+            'GOOD': 7,
+            'FAIR': 10,
+            'POOR': 15,
+            'CRITICAL': 20
+        }
+        return quality_requirements.get(quality_level, 10)
+    
+    def _preprocess_glucose_data(self, sorted_data: List[Dict], quality_assessment: Dict) -> List[Dict]:
+        """数据预处理和异常值过滤"""
+        try:
+            cleaned_data = []
+            
+            for entry in sorted_data:
+                sgv = entry.get('sgv', 0)
+                
+                # 1. 基本有效性检查
+                if sgv <= 0 or sgv > 1000:  # 排除明显无效的值
+                    continue
+                
+                # 2. 基于质量等级的过滤策略
+                quality_level = quality_assessment['quality_level']
+                
+                if quality_level == 'CRITICAL':
+                    # 严格模式：只保留最可靠的数据
+                    if sgv < 30 or sgv > 500:
+                        continue
+                elif quality_level == 'POOR':
+                    # 较严格模式
+                    if sgv < 20 or sgv > 600:
+                        continue
+                
+                # 3. 时间间隔一致性检查
+                time_str = entry.get('shanghai_time', '')
+                if not time_str:
+                    continue
+                
+                try:
+                    datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    continue
+                
+                cleaned_data.append(entry)
+            
+            return cleaned_data
+            
+        except Exception as e:
+            logger.error(f"数据预处理失败: {e}")
+            return sorted_data  # 预处理失败时返回原数据
+    
+    def _calculate_individual_data_quality(self, entry: Dict, all_data: List[Dict]) -> float:
+        """计算单个数据点的质量分数"""
+        try:
+            sgv = entry.get('sgv', 0)
+            time_str = entry.get('shanghai_time', '')
+            
+            if sgv <= 0 or not time_str:
+                return 0.0
+            
+            quality_score = 100.0
+            
+            # 1. 基于数值范围的质量评分
+            if sgv < 30 or sgv > 400:
+                quality_score *= 0.3
+            elif sgv < 50 or sgv > 300:
+                quality_score *= 0.7
+            elif sgv < 70 or sgv > 250:
+                quality_score *= 0.9
+            
+            # 2. 基于时间新鲜度的评分
+            try:
+                entry_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                time_diff_minutes = (datetime.now() - entry_time).total_seconds() / 60
+                
+                if time_diff_minutes > 120:  # 超过2小时
+                    quality_score *= 0.5
+                elif time_diff_minutes > 60:  # 超过1小时
+                    quality_score *= 0.8
+                elif time_diff_minutes > 30:  # 超过30分钟
+                    quality_score *= 0.9
+            except ValueError:
+                quality_score *= 0.7
+            
+            return max(0.0, min(100.0, quality_score))
+            
+        except Exception as e:
+            logger.error(f"计算单个数据质量失败: {e}")
+            return 50.0  # 默认中等质量
+    
+    def _calculate_enhanced_trend(self, glucose_values: List[float], quality_scores: List[float], quality_assessment: Dict) -> Dict:
+        """基于数据质量和新鲜度的动态权重趋势计算"""
+        try:
+            if len(glucose_values) < 2:
+                return {
+                    'avg_change': 0.0,
+                    'weights': [],
+                    'trend_confidence': 0.5
+                }
+            
+            # 1. 计算动态权重
+            weights = self._calculate_dynamic_weights(glucose_values, quality_scores)
+            
+            # 2. 使用加权平均计算趋势
+            changes = []
+            weighted_changes = []
+            
+            for i in range(1, len(glucose_values)):
+                change = glucose_values[i] - glucose_values[i-1]
+                changes.append(change)
+                
+                # 使用权重调整变化率
+                weight_factor = (weights[i] + weights[i-1]) / 2
+                weighted_changes.append(change * weight_factor)
+            
+            if not weighted_changes:
+                return {
+                    'avg_change': 0.0,
+                    'weights': weights,
+                    'trend_confidence': 0.5
+                }
+            
+            # 3. 计算加权平均变化率
+            avg_change = sum(weighted_changes) / len(weighted_changes)
+            
+            # 4. 计算趋势置信度
+            trend_confidence = self._calculate_trend_confidence(changes, weights, quality_assessment)
+            
+            return {
+                'avg_change': avg_change,
+                'weights': weights,
+                'trend_confidence': trend_confidence,
+                'raw_changes': changes,
+                'weighted_changes': weighted_changes
+            }
+            
+        except Exception as e:
+            logger.error(f"增强趋势计算失败: {e}")
+            return {
+                'avg_change': 0.0,
+                'weights': [1.0] * len(glucose_values),
+                'trend_confidence': 0.5
+            }
+    
+    def _calculate_dynamic_weights(self, glucose_values: List[float], quality_scores: List[float]) -> List[float]:
+        """计算基于数据质量和新鲜度的动态权重"""
+        try:
+            weights = []
+            n = len(glucose_values)
+            
+            # 1. 基础权重：指数衰减（越新的数据权重越高）
+            base_weights = []
+            for i in range(n):
+                # 指数衰减因子：最新数据权重为1，最旧数据权重为0.3
+                decay_factor = 0.3 + 0.7 * (i / (n - 1)) if n > 1 else 1.0
+                base_weights.append(decay_factor)
+            
+            # 2. 质量调整权重
+            for i in range(n):
+                quality_score = quality_scores[i] if i < len(quality_scores) else 50.0
+                quality_factor = quality_score / 100.0
+                
+                # 综合权重 = 基础权重 × 质量因子
+                combined_weight = base_weights[i] * quality_factor
+                weights.append(combined_weight)
+            
+            # 3. 归一化权重
+            total_weight = sum(weights)
+            if total_weight > 0:
+                weights = [w / total_weight * len(weights) for w in weights]  # 保持平均权重为1
+            else:
+                weights = [1.0] * len(weights)
+            
+            return weights
+            
+        except Exception as e:
+            logger.error(f"动态权重计算失败: {e}")
+            return [1.0] * len(glucose_values)
+    
+    def _calculate_trend_confidence(self, changes: List[float], weights: List[float], quality_assessment: Dict) -> float:
+        """计算趋势置信度"""
+        try:
+            if not changes:
+                return 0.5
+            
+            # 1. 基于变化一致性的置信度
+            if len(changes) > 1:
+                variance = sum((x - sum(changes) / len(changes)) ** 2 for x in changes) / len(changes)
+                std_dev = variance ** 0.5
+                avg_change = sum(changes) / len(changes)
+                
+                if avg_change != 0:
+                    consistency_confidence = max(0, 1 - (std_dev / abs(avg_change)))
+                else:
+                    consistency_confidence = 1.0
+            else:
+                consistency_confidence = 0.5
+            
+            # 2. 基于数据质量的置信度调整
+            quality_level = quality_assessment['quality_level']
+            quality_multiplier = {
+                'EXCELLENT': 1.0,
+                'GOOD': 0.9,
+                'FAIR': 0.8,
+                'POOR': 0.6,
+                'CRITICAL': 0.4
+            }
+            
+            quality_adjustment = quality_multiplier.get(quality_level, 0.8)
+            
+            # 3. 计算最终趋势置信度
+            trend_confidence = consistency_confidence * quality_adjustment
+            
+            return max(0.1, min(1.0, trend_confidence))
+            
+        except Exception as e:
+            logger.error(f"趋势置信度计算失败: {e}")
+            return 0.5
+    
+    def _calculate_enhanced_confidence(self, glucose_values: List[float], data_quality_scores: List[float], 
+                                      quality_assessment: Dict, trend_confidence: float, 
+                                      current_glucose: float, all_glucose_data: List[Dict]) -> Dict:
+        """改进的置信度计算模型 - 考虑多维度因素"""
+        try:
+            # 1. 数据量因子
+            data_points_factor = min(len(glucose_values) / 15, 1.0)  # 基准为15个数据点
+            
+            # 2. 数据质量因子
+            overall_quality_score = quality_assessment['overall_score'] / 100.0
+            data_quality_factor = overall_quality_score
+            
+            # 3. 趋势一致性因子
+            trend_consistency_factor = trend_confidence
+            
+            # 4. 时间段模式因子
+            time_pattern_factor = self._calculate_time_pattern_factor(all_glucose_data)
+            
+            # 5. 用餐/胰岛素影响因子
+            meal_insulin_factor = self._calculate_meal_insulin_factor(all_glucose_data, current_glucose)
+            
+            # 6. 历史准确率因子
+            historical_accuracy_factor = self._calculate_historical_accuracy_factor()
+            
+            # 7. 权重分配
+            weights = {
+                'data_points': 0.15,
+                'data_quality': 0.25,
+                'trend_consistency': 0.20,
+                'time_pattern': 0.15,
+                'meal_insulin': 0.15,
+                'historical_accuracy': 0.10
+            }
+            
+            # 8. 计算综合置信度
+            final_confidence = (
+                data_points_factor * weights['data_points'] +
+                data_quality_factor * weights['data_quality'] +
+                trend_consistency_factor * weights['trend_consistency'] +
+                time_pattern_factor * weights['time_pattern'] +
+                meal_insulin_factor * weights['meal_insulin'] +
+                historical_accuracy_factor * weights['historical_accuracy']
+            )
+            
+            # 9. 确保置信度在合理范围内
+            final_confidence = max(10.0, min(100.0, final_confidence * 100))
+            
+            return {
+                'final_score': round(final_confidence, 1),
+                'breakdown': {
+                    'data_points_factor': round(data_points_factor, 3),
+                    'data_quality_factor': round(data_quality_factor, 3),
+                    'trend_consistency_factor': round(trend_consistency_factor, 3),
+                    'time_pattern_factor': round(time_pattern_factor, 3),
+                    'meal_insulin_factor': round(meal_insulin_factor, 3),
+                    'historical_accuracy_factor': round(historical_accuracy_factor, 3)
+                },
+                'weights': weights
+            }
+            
+        except Exception as e:
+            logger.error(f"增强置信度计算失败: {e}")
+            return {
+                'final_score': 50.0,
+                'breakdown': {},
+                'weights': {}
+            }
+    
+    def _calculate_time_pattern_factor(self, glucose_data: List[Dict]) -> float:
+        """计算时间段模式因子"""
+        try:
+            if not glucose_data:
+                return 0.8
+            
+            current_hour = datetime.now().hour
+            
+            # 定义不同时间段的预测可靠性
+            time_patterns = {
+                'night': list(range(0, 6)),      # 凌晨0-5点，稳定性高
+                'morning': list(range(6, 12)),    # 早晨6-11点，变化较快
+                'afternoon': list(range(12, 18)), # 下午12-17点，相对稳定
+                'evening': list(range(18, 24))    # 晚上18-23点，变化较复杂
+            }
+            
+            # 为不同时间段分配可靠性分数
+            pattern_reliability = {
+                'night': 0.95,      # 夜间血糖相对稳定
+                'morning': 0.75,     # 早晨变化快，可靠性较低
+                'afternoon': 0.85,   # 下午相对稳定
+                'evening': 0.80      # 晚间变化较复杂
+            }
+            
+            for period, hours in time_patterns.items():
+                if current_hour in hours:
+                    return pattern_reliability[period]
+            
+            return 0.8  # 默认值
+            
+        except Exception as e:
+            logger.error(f"时间段模式计算失败: {e}")
+            return 0.8
+    
+    def _calculate_meal_insulin_factor(self, glucose_data: List[Dict], current_glucose: float) -> float:
+        """计算用餐/胰岛素影响因子"""
+        try:
+            # 简化版本：基于当前血糖水平和时间推断可能的用餐/胰岛素影响
+            current_hour = datetime.now().hour
+            
+            factor = 1.0
+            
+            # 1. 餐后时间段（通常血糖变化较大）
+            if 7 <= current_hour <= 10:  # 早餐后
+                factor *= 0.85
+            elif 12 <= current_hour <= 14:  # 午餐后
+                factor *= 0.85
+            elif 18 <= current_hour <= 20:  # 晚餐后
+                factor *= 0.85
+            
+            # 2. 基于当前血糖水平调整
+            if current_glucose > 180:  # 高血糖时，预测可靠性降低
+                factor *= 0.9
+            elif current_glucose < 70:  # 低血糖时，预测可靠性降低
+                factor *= 0.8
+            
+            return max(0.5, min(1.0, factor))
+            
+        except Exception as e:
+            logger.error(f"用餐胰岛素因子计算失败: {e}")
+            return 0.9
+    
+    def _calculate_historical_accuracy_factor(self) -> float:
+        """计算历史准确率因子"""
+        try:
+            # 获取最近的预测准确率
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            
+            # 获取最近24小时的预测结果
+            cursor.execute("""
+                SELECT predicted_glucose_mgdl, prediction_time 
+                FROM prediction_results 
+                WHERE prediction_time >= datetime('now', '-1 day')
+                ORDER BY prediction_time DESC LIMIT 20
+            """)
+            
+            predictions = cursor.fetchall()
+            conn.close()
+            
+            if not predictions:
+                return 0.8  # 没有历史数据时的默认值
+            
+            # 简化版本：基于预测数量评估
+            # 实际应用中应该与实际血糖值对比计算准确率
+            prediction_count = len(predictions)
+            
+            if prediction_count >= 15:
+                return 0.9
+            elif prediction_count >= 10:
+                return 0.85
+            elif prediction_count >= 5:
+                return 0.8
+            else:
+                return 0.75
+            
+        except Exception as e:
+            logger.error(f"历史准确率因子计算失败: {e}")
+            return 0.8
 
     def get_user_alert_config(self) -> Dict:
         """获取用户警报配置"""
