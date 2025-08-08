@@ -23,8 +23,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
 from contextlib import contextmanager
-from functools import lru_cache
-
+from functools import lru_cache, wraps
 import aiohttp
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_socketio import SocketIO, emit
@@ -34,6 +33,46 @@ import schedule as schedule_lib
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+def ai_retry_decorator(max_retries=3):
+    """
+    AI服务请求的重试装饰器
+    
+    Args:
+        max_retries: 最大重试次数，默认为3次
+    
+    Returns:
+        装饰器函数
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            retry_count = 0
+            last_exception = None
+            
+            while retry_count <= max_retries:
+                try:
+                    result = await func(*args, **kwargs)
+                    return result
+                    
+                except Exception as e:
+                    last_exception = e
+                    retry_count += 1
+                    
+                    # 记录详细的错误日志
+                    logger.warning(f"AI请求失败，第{retry_count}次重试 - 函数: {func.__name__}, 错误: {str(e)}")
+                    
+                    if retry_count <= max_retries:
+                        # 计算指数退避时间：1s, 2s, 4s
+                        backoff_delay = 2 ** (retry_count - 1)
+                        logger.info(f"等待{backoff_delay}秒后进行第{retry_count + 1}次重试...")
+                        await asyncio.sleep(backoff_delay)
+                    else:
+                        logger.error(f"AI请求重试次数已达上限({max_retries}次)，函数: {func.__name__}, 最终错误: {str(e)}")
+                        raise last_exception
+                        
+        return wrapper
+    return decorator
 
 class NightscoutWebMonitor:
     def __init__(self):
@@ -1266,46 +1305,50 @@ class NightscoutWebMonitor:
             logger.error(f"获取未读消息数量失败: {e}")
             return 0
 
+    @ai_retry_decorator(max_retries=3)
+    async def _make_ai_analysis_request(self, prompt: str) -> str:
+        """执行AI分析HTTP请求（带有重试机制）"""
+        request_data = {
+            "model": self.config["ai_config"]["model_name"],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_tokens": 800,
+            "stream": False
+        }
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        if self.config["ai_config"]["api_key"]:
+            headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
+            async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if 'choices' in result and len(result['choices']) > 0:
+                        ai_analysis = result['choices'][0]['message']['content'].strip()
+                        return ai_analysis
+                    else:
+                        raise ValueError(f"AI响应格式错误: {result}")
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
+
     async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
         """获取AI分析结果"""
         try:
             prompt = self.get_analysis_prompt(glucose_data, treatment_data, activity_data, meter_data, days)
-
-            request_data = {
-                "model": self.config["ai_config"]["model_name"],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "max_tokens": 800,
-                "stream": False
-            }
-
-            headers = {
-                "Content-Type": "application/json"
-            }
-
-            if self.config["ai_config"]["api_key"]:
-                headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
-                async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if 'choices' in result and len(result['choices']) > 0:
-                            ai_analysis = result['choices'][0]['message']['content'].strip()
-                            return ai_analysis
-                        else:
-                            logger.error(f"AI响应格式错误: {result}")
-                            return "AI服务暂时不可用，请稍后再试。"
-                    else:
-                        logger.error(f"AI请求失败: {response.status}")
-                        return "AI服务暂时不可用，请稍后再试。"
-
+            ai_analysis = await self._make_ai_analysis_request(prompt)
+            return ai_analysis
+            
         except Exception as e:
             logger.error(f"获取AI分析失败: {e}")
             return "AI服务暂时不可用，建议咨询专业医生获得详细指导。"
@@ -1681,6 +1724,43 @@ class NightscoutWebMonitor:
 
         return prompt
 
+    @ai_retry_decorator(max_retries=3)
+    async def _make_ai_consultation_request(self, prompt: str) -> str:
+        """执行AI咨询HTTP请求（带有重试机制）"""
+        request_data = {
+            "model": self.config["ai_config"]["model_name"],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_tokens": 500,
+            "stream": False
+        }
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        if self.config["ai_config"]["api_key"]:
+            headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
+            async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if 'choices' in result and len(result['choices']) > 0:
+                        ai_response = result['choices'][0]['message']['content'].strip()
+                        return ai_response
+                    else:
+                        raise ValueError(f"AI响应格式错误: {result}")
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
+
     async def get_ai_consultation(self, question: str, include_data: bool, days: int = 1) -> str:
         """获取AI咨询结果"""
         try:
@@ -1699,41 +1779,8 @@ class NightscoutWebMonitor:
                     return "抱歉，没有足够的血糖数据来进行咨询。请先同步数据。"
 
             prompt = self.get_consultation_prompt(question, glucose_data, treatment_data, activity_data, meter_data, days, include_data)
-
-            request_data = {
-                "model": self.config["ai_config"]["model_name"],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "max_tokens": 500,
-                "stream": False
-            }
-
-            headers = {
-                "Content-Type": "application/json"
-            }
-
-            if self.config["ai_config"]["api_key"]:
-                headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
-                async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if 'choices' in result and len(result['choices']) > 0:
-                            ai_response = result['choices'][0]['message']['content'].strip()
-                            return ai_response
-                        else:
-                            logger.error(f"AI响应格式错误: {result}")
-                            return "AI服务暂时不可用，请稍后再试。"
-                    else:
-                        logger.error(f"AI请求失败: {response.status}")
-                        return "AI服务暂时不可用，请稍后再试。"
+            ai_response = await self._make_ai_consultation_request(prompt)
+            return ai_response
 
         except Exception as e:
             logger.error(f"获取AI咨询失败: {e}")
@@ -4109,48 +4156,42 @@ def api_test_ai():
             "error": f"测试失败: {str(e)}"
         })
 
+@ai_retry_decorator(max_retries=3)
+async def _make_ai_connection_request(api_url: str, headers: dict, request_data: dict, timeout: int) -> dict:
+    """执行AI连接测试HTTP请求（带有重试机制）"""
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+        async with session.post(api_url, json=request_data, headers=headers) as response:
+            if response.status == 200:
+                result = await response.json()
+                
+                # 验证响应格式
+                if 'choices' in result and len(result['choices']) > 0:
+                    choice = result['choices'][0]
+                    if 'message' in choice and 'content' in choice['message']:
+                        ai_response = choice['message']['content'].strip()
+                        
+                        # 验证AI响应内容
+                        if ai_response:
+                            return {
+                                "success": True,
+                                "message": f"AI连接正常，模型响应: {ai_response[:50]}{'...' if len(ai_response) > 50 else ''}"
+                            }
+                        else:
+                            raise ValueError("AI响应内容为空")
+                    else:
+                        raise ValueError("AI响应格式错误，缺少message或content字段")
+                else:
+                    raise ValueError("AI响应格式错误，缺少choices字段")
+            else:
+                error_text = await response.text()
+                raise Exception(f"HTTP {response.status}: {error_text[:200]}")
+
 async def test_ai_connection_async(api_url: str, headers: dict, request_data: dict, timeout: int) -> dict:
     """异步测试AI连接"""
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
-            async with session.post(api_url, json=request_data, headers=headers) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    
-                    # 验证响应格式
-                    if 'choices' in result and len(result['choices']) > 0:
-                        choice = result['choices'][0]
-                        if 'message' in choice and 'content' in choice['message']:
-                            ai_response = choice['message']['content'].strip()
-                            
-                            # 验证AI响应内容
-                            if ai_response:
-                                return {
-                                    "success": True,
-                                    "message": f"AI连接正常，模型响应: {ai_response[:50]}{'...' if len(ai_response) > 50 else ''}"
-                                }
-                            else:
-                                return {
-                                    "success": False,
-                                    "error": "AI响应内容为空"
-                                }
-                        else:
-                            return {
-                                "success": False,
-                                "error": "AI响应格式错误，缺少message或content字段"
-                            }
-                    else:
-                        return {
-                            "success": False,
-                            "error": "AI响应格式错误，缺少choices字段"
-                        }
-                else:
-                    error_text = await response.text()
-                    return {
-                        "success": False,
-                        "error": f"HTTP {response.status}: {error_text[:200]}"
-                    }
-                    
+        result = await _make_ai_connection_request(api_url, headers, request_data, timeout)
+        return result
+            
     except asyncio.TimeoutError:
         return {
             "success": False,
