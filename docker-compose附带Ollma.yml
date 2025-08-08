@@ -3,7 +3,7 @@ version: '2.2'
 services:
   nightscout-web:
     build: .
-    container_name: nightscout-web-monitor
+    container_name: glucosebuddy
     restart: unless-stopped
     ports:
       - "1338:1338"
