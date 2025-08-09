@@ -94,21 +94,42 @@
             user-select: none;
         }
         
-        /* 移动端表格点击优化 */
+        /* 移动端表格触摸优化 */
         @media (max-width: 768px) {
             .table-responsive {
                 -webkit-overflow-scrolling: touch;
-                touch-action: pan-y;
+                touch-action: pan-y pan-x;
+                overflow-x: auto;
+                overflow-y: auto;
+                /* 增强兼容性 */
+                -ms-touch-action: pan-y pan-x;
+                /* 确保滚动容器正确渲染 */
+                position: relative;
+                /* 优化滚动性能 */
+                will-change: scroll-position;
             }
             
             .table td {
                 touch-action: manipulation;
-                -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+                -webkit-tap-highlight-color: rgba(0, 123, 255, 0.2);
+                user-select: none;
+                -webkit-user-select: none;
+                -ms-user-select: none;
+                /* 增强触摸响应 */
+                -webkit-touch-callout: none;
+                /* 优化点击区域 */
+                min-height: 44px; /* iOS推荐的最小点击区域 */
+                /* 确保内容不被意外选择 */
+                -webkit-user-drag: none;
+                -khtml-user-drag: none;
+                -moz-user-drag: none;
+                -o-user-drag: none;
+                user-drag: none;
             }
             
             /* 图表容器触摸优化 */
             .chart-container {
-                touch-action: none;
+                touch-action: pan-y pinch-zoom;
                 cursor: grab;
             }
             
@@ -136,13 +157,35 @@
                 background-color: rgba(0, 123, 255, 0.2);
                 transform: scale(0.995);
             }
+            
+            /* 移动端滚动优化 */
+            .table-responsive.scrolling {
+                -webkit-overflow-scrolling: touch;
+                scroll-behavior: smooth;
+            }
+            
+            .table-responsive.scrolling .table tbody tr {
+                pointer-events: none;
+            }
+            
+            .table-responsive.scrolling .table tbody tr.selected {
+                pointer-events: auto;
+            }
         }
         
         /* 桌面端表格选择优化 */
         @media (min-width: 769px) {
+            .table-responsive {
+                /* 确保桌面端滚动正常 */
+                overflow-x: auto;
+                overflow-y: auto;
+            }
+            
             .table tbody tr {
                 cursor: pointer;
                 transition: all 0.2s ease;
+                /* 确保桌面端交互正常 */
+                pointer-events: auto;
             }
             
             .table tbody tr:hover {

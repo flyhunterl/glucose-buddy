@@ -1038,20 +1038,82 @@
     }
     
     // 表格行选择功能
+    let tableSelectionInitialized = false;
+    
+    // 滚动配置管理
+    const SCROLL_CONFIG = {
+        threshold: 8,
+        timeThreshold: 300,
+        minVelocity: 0.5,
+        minDebounceDelay: 100,
+        maxDebounceDelay: 300
+    };
+    
+    // 性能监控
+    const performanceMonitor = {
+        startTime: 0,
+        start() {
+            this.startTime = performance.now();
+        },
+        end(label) {
+            const duration = performance.now() - this.startTime;
+            if (duration > 50) { // 超过50ms记录
+                console.warn(`${label} 耗时: ${duration.toFixed(2)}ms`);
+            }
+        }
+    };
+    
     function setupTableSelection() {
+        // 避免重复初始化
+        if (tableSelectionInitialized) {
+            console.log('表格选择功能已经初始化，跳过重复绑定');
+            return;
+        }
+        
+        tableSelectionInitialized = true;
+        
         // 为所有表格行添加点击事件
         const tableBodies = ['glucose-table-body', 'treatment-table-body', 'activity-table-body', 'meter-table-body'];
+        
+        // 创建滚动检测变量
+        const scrollDetection = {
+            isScrolling: false,
+            scrollTimeout: null,
+            touchStartX: 0,
+            touchStartY: 0,
+            touchStartTime: 0,
+            scrollThreshold: SCROLL_CONFIG.threshold,  // 使用配置
+            timeThreshold: SCROLL_CONFIG.timeThreshold,  // 使用配置
+            lastTouchTime: 0,
+            scrollVelocity: 0,
+            lastScrollPosition: { x: 0, y: 0 }
+        };
         
         tableBodies.forEach(bodyId => {
             const tbody = document.getElementById(bodyId);
             if (!tbody) return;
             
-            tbody.addEventListener('click', function(e) {
+            // 获取表格容器
+            const tableContainer = tbody.closest('.table-responsive');
+            if (!tableContainer) return;
+            
+            // 清理现有的触摸事件监听器
+            const clonedTbody = tbody.cloneNode(true);
+            tbody.parentNode.replaceChild(clonedTbody, tbody);
+            
+            // 重新获取tbody引用
+            const newTbody = document.getElementById(bodyId);
+            
+            // 添加点击事件
+            newTbody.addEventListener('click', function(e) {
+                // 如果正在滚动，不处理点击
+                if (scrollDetection.isScrolling) return;
+                
                 const row = e.target.closest('tr');
                 if (!row || row.classList.contains('loading')) return;
                 
                 // 移除同一表格中其他行的选中状态
-                tbody.querySelectorAll('tr.selected').forEach(selectedRow => {
+                newTbody.querySelectorAll('tr.selected').forEach(selectedRow => {
                     if (selectedRow !== row) {
                         selectedRow.classList.remove('selected');
                     }
@@ -1066,15 +1128,181 @@
                 }
             });
             
-            // 添加触摸支持
-            tbody.addEventListener('touchstart', function(e) {
-                const row = e.target.closest('tr');
-                if (!row || row.classList.contains('loading')) return;
+            // 添加触摸开始事件
+            newTbody.addEventListener('touchstart', function(e) {
+                performanceMonitor.start('touchstart处理');
                 
-                // 防止双击缩放
-                e.preventDefault();
-            }, { passive: false });
+                try {
+                    // 兼容性检查：确保touches数组存在
+                    if (!e.touches || e.touches.length === 0) return;
+                    
+                    const touch = e.touches[0];
+                    scrollDetection.touchStartX = touch.clientX;
+                    scrollDetection.touchStartY = touch.clientY;
+                    scrollDetection.touchStartTime = Date.now();
+                    scrollDetection.lastTouchTime = Date.now();
+                    scrollDetection.isScrolling = false;
+                    scrollDetection.lastScrollPosition = { x: touch.clientX, y: touch.clientY };
+                    scrollDetection.scrollVelocity = 0;
+                } catch (error) {
+                    console.error('触摸开始事件处理错误:', error);
+                    // 优雅降级
+                    scrollDetection.isScrolling = false;
+                } finally {
+                    performanceMonitor.end('touchstart处理');
+                }
+                
+                // 不阻止默认行为，允许滚动
+            }, { passive: true });
+            
+            // 添加触摸移动事件（滚动检测）
+            newTbody.addEventListener('touchmove', function(e) {
+                performanceMonitor.start('touchmove处理');
+                
+                try {
+                    // 兼容性检查：确保touches数组存在
+                    if (!e.touches || e.touches.length === 0) return;
+                    
+                    const touch = e.touches[0];
+                    const deltaX = Math.abs(touch.clientX - scrollDetection.touchStartX);
+                    const deltaY = Math.abs(touch.clientY - scrollDetection.touchStartY);
+                    const currentTime = Date.now();
+                    const timeDiff = currentTime - scrollDetection.lastTouchTime;
+                    
+                    // 计算滚动速度
+                    if (timeDiff > 0) {
+                        const velocityX = Math.abs(touch.clientX - scrollDetection.lastScrollPosition.x) / timeDiff;
+                        const velocityY = Math.abs(touch.clientY - scrollDetection.lastScrollPosition.y) / timeDiff;
+                        scrollDetection.scrollVelocity = Math.max(velocityX, velocityY);
+                    }
+                    
+                    // 更新最后触摸位置和时间
+                    scrollDetection.lastScrollPosition = { x: touch.clientX, y: touch.clientY };
+                    scrollDetection.lastTouchTime = currentTime;
+                    
+                    // 检测是否是滚动操作 - 使用配置的智能判断
+                    const isScrollGesture = (deltaX > scrollDetection.scrollThreshold || deltaY > scrollDetection.scrollThreshold) ||
+                                         (scrollDetection.scrollVelocity > SCROLL_CONFIG.minVelocity);
+                    
+                    if (isScrollGesture) {
+                        scrollDetection.isScrolling = true;
+                        
+                        // 添加滚动样式
+                        tableContainer.classList.add('scrolling');
+                        
+                        // 清除之前的超时
+                        if (scrollDetection.scrollTimeout) {
+                            clearTimeout(scrollDetection.scrollTimeout);
+                        }
+                        
+                        // 设置滚动结束检测 - 根据速度动态调整延迟
+                        const debounceDelay = Math.min(
+                            SCROLL_CONFIG.maxDebounceDelay, 
+                            Math.max(SCROLL_CONFIG.minDebounceDelay, 200 / (scrollDetection.scrollVelocity + 0.1))
+                        );
+                        scrollDetection.scrollTimeout = setTimeout(() => {
+                            scrollDetection.isScrolling = false;
+                            tableContainer.classList.remove('scrolling');
+                            scrollDetection.scrollVelocity = 0;
+                        }, debounceDelay);
+                    }
+                } catch (error) {
+                    console.error('触摸移动事件处理错误:', error);
+                    // 优雅降级
+                    scrollDetection.isScrolling = false;
+                    if (scrollDetection.scrollTimeout) {
+                        clearTimeout(scrollDetection.scrollTimeout);
+                    }
+                } finally {
+                    performanceMonitor.end('touchmove处理');
+                }
+                
+                // 不阻止默认行为，允许滚动
+            }, { passive: true });
+            
+            // 添加触摸结束事件
+            newTbody.addEventListener('touchend', function(e) {
+                performanceMonitor.start('touchend处理');
+                
+                try {
+                    const touchDuration = Date.now() - scrollDetection.touchStartTime;
+                    
+                    // 如果是快速点击且不是滚动，处理点击事件
+                    if (!scrollDetection.isScrolling && touchDuration < scrollDetection.timeThreshold) {
+                        // 兼容性检查：确保changedTouches数组存在
+                        if (e.changedTouches && e.changedTouches.length > 0) {
+                            const touch = e.changedTouches[0];
+                            const targetElement = document.elementFromPoint(touch.clientX, touch.clientY);
+                            const row = targetElement?.closest('tr');
+                            
+                            if (row && !row.classList.contains('loading')) {
+                                // 模拟点击事件
+                                const clickEvent = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window,
+                                    clientX: touch.clientX,
+                                    clientY: touch.clientY
+                                });
+                                row.dispatchEvent(clickEvent);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('触摸结束事件处理错误:', error);
+                } finally {
+                    performanceMonitor.end('touchend处理');
+                }
+                
+                // 清理状态
+                scrollDetection.isScrolling = false;
+                scrollDetection.scrollVelocity = 0;
+                if (scrollDetection.scrollTimeout) {
+                    clearTimeout(scrollDetection.scrollTimeout);
+                }
+                tableContainer.classList.remove('scrolling');
+            }, { passive: true });
+            
+            // 添加触摸取消事件处理
+            newTbody.addEventListener('touchcancel', function(e) {
+                performanceMonitor.start('touchcancel处理');
+                
+                try {
+                    // 清理所有状态
+                    scrollDetection.isScrolling = false;
+                    scrollDetection.scrollVelocity = 0;
+                    if (scrollDetection.scrollTimeout) {
+                        clearTimeout(scrollDetection.scrollTimeout);
+                    }
+                    tableContainer.classList.remove('scrolling');
+                } catch (error) {
+                    console.error('触摸取消事件处理错误:', error);
+                } finally {
+                    performanceMonitor.end('touchcancel处理');
+                }
+            }, { passive: true });
         });
+        
+        console.log('表格选择功能初始化完成');
+    }
+    
+    // 清理表格选择功能（用于重新初始化）
+    function cleanupTableSelection() {
+        const tableBodies = ['glucose-table-body', 'treatment-table-body', 'activity-table-body', 'meter-table-body'];
+        
+        tableBodies.forEach(bodyId => {
+            const tbody = document.getElementById(bodyId);
+            if (!tbody) return;
+            
+            // 获取表格容器
+            const tableContainer = tbody.closest('.table-responsive');
+            if (tableContainer) {
+                tableContainer.classList.remove('scrolling');
+            }
+        });
+        
+        tableSelectionInitialized = false;
+        console.log('表格选择功能已清理');
     }
     
     // 显示表格行详情
