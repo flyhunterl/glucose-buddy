@@ -1503,6 +1503,21 @@ class NightscoutWebMonitor:
             use_time_window: 是否使用时间窗口分析，默认为True
         """
         try:
+            # 数据验证 - 在进行任何处理之前先验证数据质量
+            validation_result = self.validate_glucose_data(glucose_data, treatment_data, activity_data, meter_data)
+            
+            # 如果数据验证失败，返回相应的错误信息
+            if not validation_result["is_valid"]:
+                if validation_result["data_quality_score"] == 0:
+                    return "没有可用的血糖数据进行分析，请先同步数据。"
+                else:
+                    warnings_summary = "；".join(validation_result["warnings"][:3])  # 限制显示前3个警告
+                    return f"数据质量较差，无法进行准确分析：{warnings_summary}。建议补充更多数据后再试。"
+            
+            # 记录数据质量信息
+            if validation_result["data_quality_score"] < 80:
+                logger.warning(f"数据质量分数较低: {validation_result['data_quality_score']} - 将继续分析但结果可能不够准确")
+            
             time_window = None
             filtered_glucose_data = glucose_data
             filtered_activity_data = activity_data
@@ -1523,6 +1538,14 @@ class NightscoutWebMonitor:
                 # 治疗数据保持全日数据，不进行时间窗口过滤
                 logger.info(f"时间窗口{time_window}数据过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
             
+            # 再次验证过滤后的数据
+            if use_time_window and not filtered_glucose_data:
+                logger.warning(f"时间窗口{time_window}过滤后没有血糖数据，将使用全量数据进行分析")
+                filtered_glucose_data = glucose_data
+                filtered_activity_data = activity_data
+                filtered_meter_data = meter_data
+                time_window = None
+            
             # 生成分析提示词
             prompt = self.get_analysis_prompt(
                 filtered_glucose_data, 
@@ -1533,6 +1556,16 @@ class NightscoutWebMonitor:
                 time_window
             )
             
+            # 在提示中添加数据质量信息（如果有问题）
+            if validation_result["data_quality_score"] < 100:
+                quality_warning = f"\n\n**数据质量提醒**：当前数据质量分数为{validation_result['data_quality_score']}分。"
+                if validation_result["warnings"]:
+                    # 只包含最重要的前2个警告
+                    main_warnings = validation_result["warnings"][:2]
+                    quality_warning += f"主要问题：{'；'.join(main_warnings)}。"
+                quality_warning += "分析结果仅供参考，建议结合更多数据进行判断。"
+                prompt += quality_warning
+            
             # 获取AI分析结果
             ai_analysis = await self._make_ai_analysis_request(prompt)
             return ai_analysis
@@ -1540,6 +1573,179 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"获取AI分析失败: {e}")
             return "AI服务暂时不可用，建议咨询专业医生获得详细指导。"
+
+    def validate_glucose_data(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict]) -> Dict[str, Any]:
+        """验证血糖数据的完整性和准确性
+        
+        Args:
+            glucose_data: 血糖数据
+            treatment_data: 治疗数据
+            activity_data: 活动数据
+            meter_data: 指尖血糖数据
+            
+        Returns:
+            包含验证结果和警告信息的字典
+        """
+        validation_result = {
+            "is_valid": True,
+            "warnings": [],
+            "data_quality_score": 100,
+            "missing_data_issues": [],
+            "data_consistency_issues": []
+        }
+        
+        # 检查血糖数据基本完整性
+        if not glucose_data:
+            validation_result["is_valid"] = False
+            validation_result["warnings"].append("没有血糖数据可供分析")
+            validation_result["data_quality_score"] = 0
+            return validation_result
+        
+        # 检查血糖数据数量是否足够
+        if len(glucose_data) < 5:
+            validation_result["warnings"].append(f"血糖数据量不足，只有{len(glucose_data)}条记录")
+            validation_result["data_quality_score"] -= 30
+        
+        # 检查血糖数据的数值范围
+        invalid_values = []
+        for i, entry in enumerate(glucose_data):
+            if entry.get("sgv"):
+                try:
+                    sgv_value = float(entry["sgv"])
+                    if sgv_value <= 0 or sgv_value > 600:  # 不合理的血糖值
+                        invalid_values.append(f"第{i+1}条记录: {sgv_value} mg/dL")
+                except (ValueError, TypeError):
+                    invalid_values.append(f"第{i+1}条记录: 无效数值")
+        
+        if invalid_values:
+            validation_result["warnings"].append(f"发现异常血糖值: {', '.join(invalid_values)}")
+            validation_result["data_quality_score"] -= 20
+        
+        # 检查时间戳完整性
+        missing_timestamps = []
+        for i, entry in enumerate(glucose_data):
+            if not entry.get("shanghai_time"):
+                missing_timestamps.append(f"第{i+1}条记录")
+        
+        if missing_timestamps:
+            validation_result["warnings"].append(f"缺少时间戳的记录: {', '.join(missing_timestamps)}")
+            validation_result["data_quality_score"] -= 15
+        
+        # 检查数据时间分布
+        if glucose_data:
+            try:
+                # 获取时间范围
+                times = []
+                for entry in glucose_data:
+                    if entry.get("shanghai_time"):
+                        times.append(entry["shanghai_time"])
+                
+                if times:
+                    # 检查时间跨度是否合理
+                    time_span_hours = self._calculate_data_time_span(times)
+                    if time_span_hours < 6:
+                        validation_result["warnings"].append(f"数据时间跨度较短，只有{time_span_hours:.1f}小时")
+                        validation_result["data_quality_score"] -= 10
+                    elif time_span_hours > 48:
+                        validation_result["warnings"].append(f"数据时间跨度较长，达到{time_span_hours:.1f}小时")
+                    
+                    # 检查数据密度
+                    data_density = len(glucose_data) / max(time_span_hours, 1)
+                    if data_density < 0.5:  # 每小时少于0.5条记录
+                        validation_result["warnings"].append(f"数据密度较低，平均每小时{data_density:.1f}条记录")
+                        validation_result["data_quality_score"] -= 10
+                        
+            except Exception as e:
+                validation_result["warnings"].append(f"时间分析失败: {str(e)}")
+                validation_result["data_quality_score"] -= 5
+        
+        # 检查指尖血糖数据质量
+        if meter_data:
+            invalid_meter_values = []
+            for i, entry in enumerate(meter_data):
+                if entry.get("sgv"):
+                    try:
+                        meter_value = float(entry["sgv"])
+                        if meter_value <= 0 or meter_value > 30:  # mmol/L单位检查
+                            invalid_meter_values.append(f"第{i+1}条记录: {meter_value} mmol/L")
+                    except (ValueError, TypeError):
+                        invalid_meter_values.append(f"第{i+1}条记录: 无效数值")
+            
+            if invalid_meter_values:
+                validation_result["warnings"].append(f"指尖血糖异常值: {', '.join(invalid_meter_values)}")
+                validation_result["data_quality_score"] -= 10
+        
+        # 检查治疗数据质量
+        if treatment_data:
+            # 检查碳水化合物理性范围
+            invalid_carbs = []
+            for i, entry in enumerate(treatment_data):
+                if entry.get("carbs"):
+                    try:
+                        carbs_value = float(entry["carbs"])
+                        if carbs_value < 0 or carbs_value > 500:  # 不合理的碳水值
+                            invalid_carbs.append(f"第{i+1}条记录: {carbs_value}g")
+                    except (ValueError, TypeError):
+                        invalid_carbs.append(f"第{i+1}条记录: 无效碳水值")
+            
+            if invalid_carbs:
+                validation_result["warnings"].append(f"碳水化合物数据异常: {', '.join(invalid_carbs)}")
+                validation_result["data_quality_score"] -= 5
+        
+        # 确保质量分数在0-100范围内
+        validation_result["data_quality_score"] = max(0, min(100, validation_result["data_quality_score"]))
+        
+        # 如果质量分数低于60，标记为数据质量较差
+        if validation_result["data_quality_score"] < 60:
+            validation_result["is_valid"] = False
+            validation_result["warnings"].append("数据质量较差，建议补充更多数据后再进行分析")
+        
+        # 记录验证结果
+        if validation_result["warnings"]:
+            logger.info(f"数据验证结果 - 质量分数: {validation_result['data_quality_score']}, 警告: {len(validation_result['warnings'])}个")
+            for warning in validation_result["warnings"]:
+                logger.warning(f"数据验证警告: {warning}")
+        else:
+            logger.info("数据验证通过，无质量问题")
+        
+        return validation_result
+    
+    def _calculate_data_time_span(self, time_strings: List[str]) -> float:
+        """计算数据时间跨度（小时）
+        
+        Args:
+            time_strings: 时间字符串列表
+            
+        Returns:
+            时间跨度（小时）
+        """
+        try:
+            if not time_strings:
+                return 0
+            
+            # 解析时间字符串
+            times = []
+            for time_str in time_strings:
+                try:
+                    # 尝试解析不同格式的时间字符串
+                    if "T" in time_str:
+                        dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                    else:
+                        # 处理 "YYYY-MM-DD HH:MM:SS" 格式
+                        dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+                    times.append(dt)
+                except Exception:
+                    continue
+            
+            if not times:
+                return 0
+            
+            # 计算时间跨度
+            time_span = max(times) - min(times)
+            return time_span.total_seconds() / 3600  # 转换为小时
+            
+        except Exception:
+            return 0
 
     def calculate_estimated_hba1c(self, glucose_values_mmol: List[float]) -> Dict[str, float]:
         """计算估算的糖化血红蛋白（HbA1c）"""
@@ -1701,7 +1907,11 @@ class NightscoutWebMonitor:
             days: 分析天数
             time_window: 时间窗口ID (1, 2, 或 3)，如果不指定则使用通用分析
         """
-
+        
+        # 获取用户配置的时区偏移
+        timezone_offset = self.config.get("basic", {}).get("timezone_offset", 8)
+        timezone_name = f"UTC+{timezone_offset}" if timezone_offset >= 0 else f"UTC{timezone_offset}"
+        
         # 转换血糖数据为mmol/L并转换时区
         glucose_mmol = []
         for entry in glucose_data:
@@ -1836,6 +2046,14 @@ class NightscoutWebMonitor:
 
         prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info} {treatment_prompt}
 
+注意：所有时间显示均为用户本地时间（{timezone_name}），请基于此时区进行分析。
+
+**重要要求：数据来源透明度**
+- 必须明确区分实际测量的血糖数据和AI推理/预测的数值
+- 对于任何非实际测量数据（如预测值、估算值、插值等），必须明确标注为"AI预测"、"估算值"或"推理数据"
+- 例如：如果提到8.9 mmol/L这个数值，必须说明是实际测量还是AI推理得到
+- 不得将AI推理数据混同为实际测量数据进行报告
+
 血糖数据（mmol/L）：
 """
 
@@ -1947,6 +2165,11 @@ class NightscoutWebMonitor:
 6. 具体的改善建议
 7. 需要关注的风险点
 
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 避免将AI推理数据呈现为实际测量结果
+
 请用专业但易懂的语言回答，控制在400字以内。"""
 
         return prompt
@@ -2004,8 +2227,33 @@ class NightscoutWebMonitor:
 
                 if not glucose_data:
                     return "抱歉，没有足够的血糖数据来进行咨询。请先同步数据。"
+                
+                # 数据验证 - 只有在包含数据时才进行验证
+                validation_result = self.validate_glucose_data(glucose_data, treatment_data, activity_data, meter_data)
+                
+                # 如果数据验证失败，返回相应的错误信息
+                if not validation_result["is_valid"]:
+                    if validation_result["data_quality_score"] == 0:
+                        return "没有可用的血糖数据进行分析，请先同步数据。"
+                    else:
+                        warnings_summary = "；".join(validation_result["warnings"][:2])  # 限制显示前2个警告
+                        return f"数据质量较差，无法进行准确咨询：{warnings_summary}。建议补充更多数据后再试。"
+                
+                # 记录数据质量信息
+                if validation_result["data_quality_score"] < 80:
+                    logger.warning(f"AI咨询数据质量分数较低: {validation_result['data_quality_score']}")
 
             prompt = self.get_consultation_prompt(question, glucose_data, treatment_data, activity_data, meter_data, days, include_data)
+            
+            # 在提示中添加数据质量信息（如果有问题且包含数据）
+            if include_data and 'validation_result' in locals() and validation_result.get("data_quality_score", 100) < 100:
+                quality_warning = f"\n\n**数据质量提醒**：当前数据质量分数为{validation_result['data_quality_score']}分。"
+                if validation_result["warnings"]:
+                    main_warnings = validation_result["warnings"][:2]
+                    quality_warning += f"主要问题：{'；'.join(main_warnings)}。"
+                quality_warning += "咨询结果仅供参考，建议结合更多数据进行判断。"
+                prompt += quality_warning
+            
             ai_response = await self._make_ai_consultation_request(prompt)
             return ai_response
 
@@ -2015,6 +2263,10 @@ class NightscoutWebMonitor:
 
     def get_consultation_prompt(self, question: str, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int, include_data: bool) -> str:
         """生成AI咨询的prompt"""
+        # 获取用户配置的时区偏移
+        timezone_offset = self.config.get("basic", {}).get("timezone_offset", 8)
+        timezone_name = f"UTC+{timezone_offset}" if timezone_offset >= 0 else f"UTC{timezone_offset}"
+        
         bmi_data = self.calculate_bmi()
         body_fat = self.config.get("basic", {}).get("body_fat_percentage", 0)
         
@@ -2099,6 +2351,14 @@ class NightscoutWebMonitor:
 
             prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请根据以下最近{days}天的血糖数据，回答用户的问题。{prompt_info} {treatment_prompt}
 
+注意：所有时间显示均为用户本地时间（{timezone_name}），请基于此时区进行分析。
+
+**重要要求：数据来源透明度**
+- 必须明确区分实际测量的血糖数据和AI推理/预测的数值
+- 对于任何非实际测量数据（如预测值、估算值、插值等），必须明确标注为"AI预测"、"估算值"或"推理数据"
+- 例如：如果提到8.9 mmol/L这个数值，必须说明是实际测量还是AI推理得到
+- 不得将AI推理数据混同为实际测量数据进行报告
+
 血糖数据（mmol/L, 最近20条）:
 """
             for entry in glucose_mmol[:20]:
@@ -2120,6 +2380,11 @@ class NightscoutWebMonitor:
 用户问题: "{question}"
 
 请用专业、简洁、易懂的语言回答，并提供可行的建议。如果数据不足以回答问题，请明确指出。
+
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 避免将AI推理数据呈现为实际测量结果
 """
         else:
             prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请回答以下用户的问题。{prompt_info} {treatment_prompt}
