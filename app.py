@@ -16,7 +16,7 @@ try:
 except ImportError:
     import tomli as tomllib
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import threading
 import smtplib
 from email.mime.text import MIMEText
@@ -2119,21 +2119,30 @@ class NightscoutWebMonitor:
             time_window_guidance = ""
             if time_window is not None:
                 current_time = datetime.now()
+                # 获取当前日期和时间范围
+                today_date = current_time.strftime("%m月%d日")
+                time_ranges = {
+                    1: "00:00-14:59",
+                    2: "15:00-20:59", 
+                    3: "21:00-23:59"
+                }
+                time_range = time_ranges.get(time_window, "00:00-23:59")
+                
                 time_descriptions = {
-                    1: """当前为时间窗口1 (00:00-14:59)，请重点关注：
+                    1: f"""根据你{today_date} {time_range}的各种数据分析，请重点关注：
 - 凌晨空腹血糖控制情况
 - 早餐后血糖反应和峰值
 - 上午血糖稳定性
 - 如有午餐数据，请分析午餐前血糖准备情况
 - 识别和报告该时间段内任何缺失的关键数据""",
-                    2: """当前为时间窗口2 (15:00-20:59)，请重点关注：
+                    2: f"""根据你{today_date} {time_range}的各种数据分析，请重点关注：
 - 午餐后血糖反应和控制
 - 下午血糖波动模式
 - 晚餐前血糖准备情况
 - 如有晚餐数据，请分析晚餐后初步反应
 - 运动对下午血糖的影响
 - 识别和报告该时间段内任何缺失的关键数据""",
-                    3: """当前为时间窗口3 (21:00-23:59)，请重点关注：
+                    3: f"""根据你{today_date} {time_range}的各种数据分析，请重点关注：
 - 晚餐后血糖反应和控制
 - 夜间血糖起始水平和趋势
 - 全天血糖控制总结
@@ -2141,7 +2150,12 @@ class NightscoutWebMonitor:
 - 基于全天数据的整体改善建议
 - 识别和报告任何缺失的关键数据（特别是晚餐数据）"""
                 }
-                time_window_guidance = time_descriptions.get(time_window, "")
+                time_window_guidance = time_descriptions.get(time_window, f"根据你{today_date} {time_range}的各种数据分析：")
+            else:
+                # 如果没有指定时间窗口，使用默认的当天数据分析格式
+                current_time = datetime.now()
+                today_date = current_time.strftime("%m月%d日")
+                time_window_guidance = f"根据你{today_date} 00:00-23:59的各种数据分析："
             
             prompt += f"""
 
@@ -5029,20 +5043,22 @@ def api_current_glucose():
 @app.route('/api/analysis')
 def api_analysis():
     """获取AI分析API"""
-    days = request.args.get('days', 1, type=int)
+    # 获取今天的数据，确保只分析当天
+    today = datetime.now().strftime('%Y-%m-%d')
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
-    glucose_data = monitor.get_glucose_data_from_db(days)
-    treatment_data = monitor.get_treatment_data_from_db(days)
-    activity_data = monitor.get_activity_data_from_db(days)
-    meter_data = monitor.get_meter_data_from_db(days)
+    glucose_data = monitor.get_glucose_data_from_db(start_date=today, end_date=today)
+    treatment_data = monitor.get_treatment_data_from_db(start_date=today, end_date=today)
+    activity_data = monitor.get_activity_data_from_db(start_date=today, end_date=today)
+    meter_data = monitor.get_meter_data_from_db(start_date=today, end_date=today)
 
     if not glucose_data:
         return jsonify({'error': '暂无血糖数据'}), 404
 
     try:
         try:
-            # 使用基于时间的分析（默认启用时间窗口分析）
-            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days, use_time_window=True))
+            # 使用基于时间的分析（启用时间窗口分析），分析当天数据
+            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
             # 保存分析结果到消息表
             monitor.save_message("analysis", "血糖分析报告", analysis)
             return jsonify({'analysis': analysis})
@@ -5050,7 +5066,7 @@ def api_analysis():
             # 处理在非主线程中运行asyncio.run可能出现的问题
             if "cannot run loop while another loop is running" in str(e):
                 loop = asyncio.get_event_loop()
-                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
+                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
                 # 保存分析结果到消息表
                 monitor.save_message("analysis", "血糖分析报告", analysis)
                 return jsonify({'analysis': analysis})
