@@ -589,6 +589,76 @@ class NightscoutWebMonitor:
             # 默认返回窗口1
             return 1
 
+    def get_smart_data_range(self, analysis_time: datetime = None) -> Dict[str, Any]:
+        """
+        获取智能数据范围信息
+        
+        Args:
+            analysis_time: 分析时间，默认为当前时间
+        
+        Returns:
+            Dict[str, Any]: 包含数据范围信息的字典
+                - start_time: 当天00:00时间
+                - end_time: 当前分析时间
+                - start_time_str: 开始时间字符串
+                - end_time_str: 结束时间字符串
+                - range_description: 时间范围描述
+                - expected_duration_hours: 预期数据时长（小时）
+                - analysis_time_str: 分析时间字符串
+        """
+        try:
+            if analysis_time is None:
+                analysis_time = datetime.now()
+            
+            # 计算当天的开始时间（00:00）
+            start_time = analysis_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_time = analysis_time
+            
+            # 计算预期时长（小时）
+            expected_duration_hours = (end_time - start_time).total_seconds() / 3600
+            
+            # 格式化时间字符串
+            start_time_str = start_time.strftime("%H:%M")
+            end_time_str = end_time.strftime("%H:%M")
+            analysis_time_str = analysis_time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 生成范围描述
+            if expected_duration_hours < 1:
+                range_description = f"00:00-{end_time_str}（数据较少）"
+            elif expected_duration_hours < 4:
+                range_description = f"00:00-{end_time_str}（早起时段）"
+            elif expected_duration_hours < 12:
+                range_description = f"00:00-{end_time_str}（上午时段）"
+            elif expected_duration_hours < 18:
+                range_description = f"00:00-{end_time_str}（下午时段）"
+            else:
+                range_description = f"00:00-{end_time_str}（全天时段）"
+            
+            return {
+                "start_time": start_time,
+                "end_time": end_time,
+                "start_time_str": start_time_str,
+                "end_time_str": end_time_str,
+                "range_description": range_description,
+                "expected_duration_hours": expected_duration_hours,
+                "analysis_time_str": analysis_time_str
+            }
+            
+        except Exception as e:
+            logger.error(f"获取智能数据范围失败: {e}")
+            # 返回默认值
+            default_time = datetime.now()
+            start_time = default_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            return {
+                "start_time": start_time,
+                "end_time": default_time,
+                "start_time_str": "00:00",
+                "end_time_str": default_time.strftime("%H:%M"),
+                "range_description": "00:00-当前时间",
+                "expected_duration_hours": default_time.hour,
+                "analysis_time_str": default_time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+
     def filter_data_by_time_window(self, data: List[Dict], time_window: int, data_type: str) -> List[Dict]:
         """
         根据时间窗口过滤数据
@@ -663,6 +733,346 @@ class NightscoutWebMonitor:
             
         except Exception as e:
             logger.error(f"时间窗口数据过滤失败: {e}")
+            return data
+
+    def check_data_completeness(self, glucose_data: List[Dict], treatment_data: List[Dict], 
+                               activity_data: List[Dict], meter_data: List[Dict], 
+                               data_range: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        检查数据完整性
+        
+        Args:
+            glucose_data: 血糖数据
+            treatment_data: 治疗数据
+            activity_data: 活动数据
+            meter_data: 指尖血糖数据
+            data_range: 数据范围信息
+        
+        Returns:
+            Dict[str, Any]: 数据完整性检查结果
+                - is_complete: 数据是否完整
+                - missing_time_ranges: 缺失的时间段列表
+                - data_density: 数据密度分析
+                - completeness_score: 完整性评分(0-100)
+                - warnings: 警告信息列表
+        """
+        try:
+            start_time = data_range["start_time"]
+            end_time = data_range["end_time"]
+            expected_duration_hours = data_range["expected_duration_hours"]
+            
+            # 合并所有数据进行分析
+            all_data = []
+            time_field_map = {
+                "glucose": "shanghai_time",
+                "treatment": "shanghai_time",
+                "activity": "shanghai_time",
+                "meter": "shanghai_time"
+            }
+            
+            # 处理血糖数据
+            for entry in glucose_data:
+                time_str = entry.get(time_field_map["glucose"], "")
+                if time_str and self._is_time_in_range(time_str, start_time, end_time):
+                    all_data.append(("glucose", time_str))
+            
+            # 处理指尖血糖数据
+            for entry in meter_data:
+                time_str = entry.get(time_field_map["meter"], "")
+                if time_str and self._is_time_in_range(time_str, start_time, end_time):
+                    all_data.append(("meter", time_str))
+            
+            # 处理治疗数据（全日数据都纳入考虑）
+            for entry in treatment_data:
+                time_str = entry.get(time_field_map["treatment"], "")
+                if time_str and self._is_time_in_range(time_str, start_time, end_time):
+                    all_data.append(("treatment", time_str))
+            
+            # 处理活动数据
+            for entry in activity_data:
+                time_str = entry.get(time_field_map["activity"], "")
+                if time_str and self._is_time_in_range(time_str, start_time, end_time):
+                    all_data.append(("activity", time_str))
+            
+            # 分析数据密度
+            data_density = self._analyze_data_density(all_data, start_time, end_time)
+            
+            # 检测缺失的时间段
+            missing_time_ranges = self._detect_missing_time_ranges(all_data, start_time, end_time)
+            
+            # 计算完整性评分
+            completeness_score = self._calculate_completeness_score(
+                all_data, expected_duration_hours, data_density, missing_time_ranges
+            )
+            
+            # 生成警告信息
+            warnings = []
+            if completeness_score < 70:
+                warnings.append("数据完整性较低，分析结果可能不够准确")
+            if len(missing_time_ranges) > 0:
+                warnings.append(f"检测到{len(missing_time_ranges)}个缺失的数据时段")
+            if data_density.get("glucose_density", 0) < 0.5:
+                warnings.append("血糖数据密度较低，建议增加测量频率")
+            
+            # 判断是否完整
+            is_complete = completeness_score >= 70 and len(missing_time_ranges) == 0
+            
+            return {
+                "is_complete": is_complete,
+                "missing_time_ranges": missing_time_ranges,
+                "data_density": data_density,
+                "completeness_score": completeness_score,
+                "warnings": warnings,
+                "total_data_points": len(all_data),
+                "analysis_time_range": data_range["range_description"]
+            }
+            
+        except Exception as e:
+            logger.error(f"数据完整性检查失败: {e}")
+            return {
+                "is_complete": False,
+                "missing_time_ranges": [],
+                "data_density": {},
+                "completeness_score": 0,
+                "warnings": ["数据完整性检查失败"],
+                "total_data_points": 0,
+                "analysis_time_range": "未知"
+            }
+
+    def _is_time_in_range(self, time_str: str, start_time: datetime, end_time: datetime) -> bool:
+        """检查时间是否在指定范围内"""
+        try:
+            if len(time_str) >= 19:
+                dt = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
+            else:
+                return False
+            
+            return start_time <= dt <= end_time
+        except (ValueError, TypeError):
+            return False
+
+    def _analyze_data_density(self, all_data: List[Tuple[str, str]], start_time: datetime, end_time: datetime) -> Dict[str, Any]:
+        """分析数据密度"""
+        try:
+            # 按数据类型分组
+            data_by_type = {}
+            for data_type, time_str in all_data:
+                if data_type not in data_by_type:
+                    data_by_type[data_type] = []
+                data_by_type[data_type].append(time_str)
+            
+            # 计算每种数据类型的密度
+            density_info = {}
+            for data_type, time_list in data_by_type.items():
+                if len(time_list) == 0:
+                    density_info[f"{data_type}_density"] = 0
+                    density_info[f"{data_type}_count"] = 0
+                    continue
+                
+                # 计算时间范围（小时）
+                duration_hours = (end_time - start_time).total_seconds() / 3600
+                if duration_hours == 0:
+                    density_info[f"{data_type}_density"] = 0
+                else:
+                    # 计算每小时的平均数据点数
+                    density = len(time_list) / duration_hours
+                    density_info[f"{data_type}_density"] = density
+                    density_info[f"{data_type}_count"] = len(time_list)
+            
+            # 计算整体密度
+            density_info["overall_density"] = len(all_data) / max(1, (end_time - start_time).total_seconds() / 3600)
+            density_info["overall_count"] = len(all_data)
+            
+            return density_info
+            
+        except Exception as e:
+            logger.error(f"数据密度分析失败: {e}")
+            return {"overall_density": 0, "overall_count": 0}
+
+    def _detect_missing_time_ranges(self, all_data: List[Tuple[str, str]], start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+        """检测缺失的时间段"""
+        try:
+            if not all_data:
+                return [{
+                    "start": start_time.strftime("%H:%M"),
+                    "end": end_time.strftime("%H:%M"),
+                    "duration_hours": (end_time - start_time).total_seconds() / 3600,
+                    "severity": "high"
+                }]
+            
+            # 提取所有时间点并排序
+            time_points = []
+            for data_type, time_str in all_data:
+                try:
+                    if len(time_str) >= 19:
+                        dt = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
+                        time_points.append(dt)
+                except ValueError:
+                    continue
+            
+            if not time_points:
+                return [{
+                    "start": start_time.strftime("%H:%M"),
+                    "end": end_time.strftime("%H:%M"),
+                    "duration_hours": (end_time - start_time).total_seconds() / 3600,
+                    "severity": "high"
+                }]
+            
+            time_points.sort()
+            
+            # 检测缺失的时间段
+            missing_ranges = []
+            expected_interval = timedelta(minutes=30)  # 预期的数据间隔
+            
+            # 检查开始时间到第一个数据点
+            if time_points[0] > start_time + expected_interval:
+                missing_ranges.append({
+                    "start": start_time.strftime("%H:%M"),
+                    "end": time_points[0].strftime("%H:%M"),
+                    "duration_hours": (time_points[0] - start_time).total_seconds() / 3600,
+                    "severity": "high" if (time_points[0] - start_time) > timedelta(hours=2) else "medium"
+                })
+            
+            # 检查数据点之间的间隔
+            for i in range(len(time_points) - 1):
+                gap = time_points[i + 1] - time_points[i]
+                if gap > expected_interval:
+                    missing_ranges.append({
+                        "start": time_points[i].strftime("%H:%M"),
+                        "end": time_points[i + 1].strftime("%H:%M"),
+                        "duration_hours": gap.total_seconds() / 3600,
+                        "severity": "high" if gap > timedelta(hours=2) else "medium"
+                    })
+            
+            # 检查最后一个数据点到结束时间
+            if time_points[-1] < end_time - expected_interval:
+                missing_ranges.append({
+                    "start": time_points[-1].strftime("%H:%M"),
+                    "end": end_time.strftime("%H:%M"),
+                    "duration_hours": (end_time - time_points[-1]).total_seconds() / 3600,
+                    "severity": "high" if (end_time - time_points[-1]) > timedelta(hours=2) else "medium"
+                })
+            
+            return missing_ranges
+            
+        except Exception as e:
+            logger.error(f"缺失时间段检测失败: {e}")
+            return []
+
+    def _calculate_completeness_score(self, all_data: List[Tuple[str, str]], expected_duration_hours: float, 
+                                    data_density: Dict[str, Any], missing_time_ranges: List[Dict[str, Any]]) -> float:
+        """计算完整性评分"""
+        try:
+            score = 100.0
+            
+            # 基于数据密度的扣分
+            overall_density = data_density.get("overall_density", 0)
+            if overall_density < 1:  # 每小时少于1个数据点
+                score -= 30
+            elif overall_density < 2:  # 每小时少于2个数据点
+                score -= 15
+            elif overall_density < 4:  # 每小时少于4个数据点
+                score -= 5
+            
+            # 基于血糖数据密度的扣分（血糖数据最重要）
+            glucose_density = data_density.get("glucose_density", 0)
+            if glucose_density < 1:
+                score -= 40
+            elif glucose_density < 2:
+                score -= 20
+            elif glucose_density < 4:
+                score -= 10
+            
+            # 基于缺失时间段的扣分
+            total_missing_hours = sum(missing_range.get("duration_hours", 0) for missing_range in missing_time_ranges)
+            if expected_duration_hours > 0:
+                missing_ratio = total_missing_hours / expected_duration_hours
+                if missing_ratio > 0.5:  # 超过50%的时间缺失
+                    score -= 50
+                elif missing_ratio > 0.3:  # 超过30%的时间缺失
+                    score -= 30
+                elif missing_ratio > 0.1:  # 超过10%的时间缺失
+                    score -= 15
+            
+            # 基于缺失时间段严重程度的扣分
+            high_severity_count = sum(1 for missing_range in missing_time_ranges if missing_range.get("severity") == "high")
+            if high_severity_count > 0:
+                score -= min(20, high_severity_count * 10)
+            
+            # 确保分数在0-100之间
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            logger.error(f"完整性评分计算失败: {e}")
+            return 0.0
+
+    def filter_data_by_smart_range(self, data: List[Dict], data_range: Dict[str, Any], 
+                                  data_type: str) -> List[Dict]:
+        """
+        根据智能数据范围过滤数据
+        
+        Args:
+            data: 原始数据列表
+            data_range: 智能数据范围信息
+            data_type: 数据类型 ("glucose", "treatment", "activity", "meter")
+        
+        Returns:
+            List[Dict]: 过滤后的数据列表
+        """
+        try:
+            if not data:
+                return []
+            
+            # 治疗数据不过滤，返回全日数据（与原有逻辑保持一致）
+            if data_type == "treatment":
+                logger.info("治疗数据不进行智能范围过滤，返回全日数据")
+                return data
+            
+            start_time = data_range["start_time"]
+            end_time = data_range["end_time"]
+            
+            # 根据数据类型获取时间字段
+            time_field_map = {
+                "glucose": "shanghai_time",
+                "activity": "shanghai_time", 
+                "meter": "shanghai_time"
+            }
+            
+            time_field = time_field_map.get(data_type)
+            if not time_field:
+                logger.warning(f"未知数据类型: {data_type}，返回全部数据")
+                return data
+            
+            filtered_data = []
+            
+            for item in data:
+                time_str = item.get(time_field, "")
+                if not time_str:
+                    continue
+                
+                try:
+                    # 解析时间
+                    if len(time_str) >= 19:
+                        dt = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
+                    else:
+                        logger.warning(f"时间格式不正确: {time_str}")
+                        continue
+                    
+                    # 检查是否在智能数据范围内
+                    if start_time <= dt <= end_time:
+                        filtered_data.append(item)
+                        
+                except ValueError as e:
+                    logger.warning(f"解析时间失败: {time_str}, 错误: {e}")
+                    continue
+            
+            logger.info(f"智能数据范围过滤结果: {data_type}数据从{len(data)}条过滤为{len(filtered_data)}条")
+            logger.info(f"智能数据范围: {data_range['range_description']}")
+            
+            return filtered_data
+            
+        except Exception as e:
+            logger.error(f"智能数据范围过滤失败: {e}")
             return data
 
     async def fetch_nightscout_data(self, start_date: str, end_date: str) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
@@ -1491,7 +1901,7 @@ class NightscoutWebMonitor:
                     error_text = await response.text()
                     raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
 
-    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, use_time_window: bool = True) -> str:
+    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, use_time_window: bool = True, use_smart_range: bool = True) -> str:
         """获取AI分析结果
         
         Args:
@@ -1500,7 +1910,8 @@ class NightscoutWebMonitor:
             activity_data: 活动数据
             meter_data: 指尖血糖数据
             days: 分析天数
-            use_time_window: 是否使用时间窗口分析，默认为True
+            use_time_window: 是否使用时间窗口分析，默认为True（保持向后兼容）
+            use_smart_range: 是否使用智能数据范围分析，默认为True
         """
         try:
             # 数据验证 - 在进行任何处理之前先验证数据质量
@@ -1518,33 +1929,93 @@ class NightscoutWebMonitor:
             if validation_result["data_quality_score"] < 80:
                 logger.warning(f"数据质量分数较低: {validation_result['data_quality_score']} - 将继续分析但结果可能不够准确")
             
+            # 智能数据范围分析初始化
+            current_time = datetime.now()
+            data_completeness = None
             time_window = None
             filtered_glucose_data = glucose_data
             filtered_activity_data = activity_data
             filtered_meter_data = meter_data
             
-            # 如果启用时间窗口分析，则进行数据过滤
-            if use_time_window:
-                # 检测当前时间窗口
-                current_time = datetime.now()
-                time_window = self.get_time_window_from_analysis_time(current_time)
-                logger.info(f"当前时间窗口: {time_window} (时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')})")
-                
-                # 根据时间窗口过滤数据
-                filtered_glucose_data = self.filter_data_by_time_window(glucose_data, time_window, "glucose")
-                filtered_activity_data = self.filter_data_by_time_window(activity_data, time_window, "activity")
-                filtered_meter_data = self.filter_data_by_time_window(meter_data, time_window, "meter")
-                
-                # 治疗数据保持全日数据，不进行时间窗口过滤
-                logger.info(f"时间窗口{time_window}数据过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+            # 获取智能数据范围配置
+            smart_range_config = self.config.get("smart_data_range", {})
+            smart_range_enabled = smart_range_config.get("enabled", True)
             
-            # 再次验证过滤后的数据
-            if use_time_window and not filtered_glucose_data:
-                logger.warning(f"时间窗口{time_window}过滤后没有血糖数据，将使用全量数据进行分析")
+            # 如果配置中禁用了智能数据范围，则不使用
+            if not smart_range_enabled:
+                use_smart_range = False
+                logger.info("智能数据范围功能已禁用，将使用传统时间窗口分析")
+            
+            # 优先使用智能数据范围分析
+            if use_smart_range:
+                try:
+                    # 获取智能数据范围
+                    smart_range = self.get_smart_data_range(current_time)
+                    logger.info(f"智能数据范围: {smart_range['range_description']} (时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                    
+                    # 根据智能数据范围过滤数据
+                    filtered_glucose_data = self.filter_data_by_smart_range(glucose_data, smart_range, "glucose")
+                    filtered_activity_data = self.filter_data_by_smart_range(activity_data, smart_range, "activity")
+                    filtered_meter_data = self.filter_data_by_smart_range(meter_data, smart_range, "meter")
+                    
+                    # 治疗数据保持全日数据，不进行智能范围过滤
+                    logger.info(f"智能数据范围过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+                    
+                    # 检查数据完整性
+                    data_completeness = self.check_data_completeness(
+                        filtered_glucose_data, treatment_data, filtered_activity_data, 
+                        filtered_meter_data, smart_range
+                    )
+                    logger.info(f"数据完整性检查完成 - 评分: {data_completeness['completeness_score']}, 完整: {data_completeness['is_complete']}")
+                    
+                    # 获取配置参数
+                    completeness_threshold = smart_range_config.get("completeness_threshold", 70)
+                    auto_fallback = smart_range_config.get("auto_fallback_to_full_day", True)
+                    
+                    # 如果数据完整性过低，记录警告但仍继续分析
+                    if data_completeness['completeness_score'] < completeness_threshold:
+                        logger.warning(f"数据完整性评分{data_completeness['completeness_score']}低于阈值{completeness_threshold}，分析结果可能不够准确")
+                    
+                    # 如果启用了自动回退且数据不完整，则回退到全量数据
+                    if auto_fallback and not data_completeness['is_complete']:
+                        logger.info("数据不完整，根据配置回退到全量数据分析")
+                        filtered_glucose_data = glucose_data
+                        filtered_activity_data = activity_data
+                        filtered_meter_data = meter_data
+                        data_completeness = None
+                    
+                except Exception as e:
+                    logger.error(f"智能数据范围分析失败: {e}，将使用传统时间窗口分析")
+                    use_smart_range = False
+            
+            # 如果智能数据范围分析失败或未启用，则使用传统时间窗口分析
+            if not use_smart_range and use_time_window:
+                try:
+                    # 检测当前时间窗口
+                    time_window = self.get_time_window_from_analysis_time(current_time)
+                    logger.info(f"回退到时间窗口分析: {time_window}")
+                    
+                    # 根据时间窗口过滤数据
+                    filtered_glucose_data = self.filter_data_by_time_window(glucose_data, time_window, "glucose")
+                    filtered_activity_data = self.filter_data_by_time_window(activity_data, time_window, "activity")
+                    filtered_meter_data = self.filter_data_by_time_window(meter_data, time_window, "meter")
+                    
+                    # 治疗数据保持全日数据，不进行时间窗口过滤
+                    logger.info(f"时间窗口{time_window}数据过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+                    
+                except Exception as e:
+                    logger.error(f"时间窗口分析失败: {e}，将使用全量数据进行分析")
+                    time_window = None
+            
+            # 验证过滤后的数据
+            if (use_smart_range or use_time_window) and not filtered_glucose_data:
+                logger.warning("数据过滤后没有血糖数据，将使用全量数据进行分析")
                 filtered_glucose_data = glucose_data
                 filtered_activity_data = activity_data
                 filtered_meter_data = meter_data
                 time_window = None
+                use_smart_range = False
+                data_completeness = None
             
             # 生成分析提示词
             prompt = self.get_analysis_prompt(
@@ -1553,7 +2024,10 @@ class NightscoutWebMonitor:
                 filtered_activity_data, 
                 filtered_meter_data, 
                 days, 
-                time_window
+                time_window,
+                use_smart_range,
+                current_time,
+                data_completeness
             )
             
             # 在提示中添加数据质量信息（如果有问题）
@@ -1896,8 +2370,169 @@ class NightscoutWebMonitor:
 
         return basic_stats
 
-    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None) -> str:
-        """生成AI分析的prompt
+    def _filter_data_by_time_window(self, data: List[Dict], time_window: int) -> List[Dict]:
+        """根据时间窗口过滤数据
+        
+        Args:
+            data: 原始数据列表
+            time_window: 时间窗口ID (1, 2, 或 3)
+        
+        Returns:
+            过滤后的数据列表
+        """
+        if not data:
+            return []
+        
+        filtered_data = []
+        time_ranges = {
+            1: [(0, 0, 14, 59)],  # 00:00-14:59
+            2: [(0, 0, 14, 59), (15, 0, 20, 59)],  # 00:00-14:59 + 15:00-20:59
+            3: [(0, 0, 14, 59), (15, 0, 20, 59), (21, 0, 23, 59)]  # 所有时间段
+        }
+        
+        for entry in data:
+            shanghai_time = entry.get("shanghai_time", "")
+            if not shanghai_time or len(shanghai_time) < 16:
+                continue
+                
+            try:
+                # 解析时间字符串，格式为 "YYYY-MM-DD HH:MM"
+                time_part = shanghai_time[:16]
+                dt = datetime.strptime(time_part, "%Y-%m-%d %H:%M")
+                hour = dt.hour
+                minute = dt.minute
+                
+                # 检查是否在指定的时间范围内
+                for start_hour, start_minute, end_hour, end_minute in time_ranges.get(time_window, []):
+                    if (start_hour < hour < end_hour) or \
+                       (hour == start_hour and minute >= start_minute) or \
+                       (hour == end_hour and minute <= end_minute):
+                        filtered_data.append(entry)
+                        break
+                        
+            except (ValueError, TypeError):
+                continue
+        
+        return filtered_data
+
+    def _check_data_availability(self, glucose_data: List[Dict], treatment_data: List[Dict], 
+                               activity_data: List[Dict], meter_data: List[Dict], 
+                               time_window: int) -> Dict[str, Any]:
+        """检查各时间段数据可用性
+        
+        Args:
+            glucose_data: 血糖数据
+            treatment_data: 治疗数据
+            activity_data: 活动数据
+            meter_data: 指尖血糖数据
+            time_window: 时间窗口ID
+        
+        Returns:
+            各时间段数据可用性字典
+        """
+        availability = {}
+        
+        # 检查每个时间段的数据
+        for window_id in [1, 2, 3]:
+            window_glucose = self._filter_data_by_time_window(glucose_data, window_id)
+            window_treatment = self._filter_data_by_time_window(treatment_data, window_id)
+            window_activity = self._filter_data_by_time_window(activity_data, window_id)
+            window_meter = self._filter_data_by_time_window(meter_data, window_id)
+            
+            availability[f"window_{window_id}"] = {
+                "has_glucose": len(window_glucose) > 0,
+                "has_treatment": len(window_treatment) > 0,
+                "has_activity": len(window_activity) > 0,
+                "has_meter": len(window_meter) > 0,
+                "has_any_data": len(window_glucose + window_treatment + window_activity + window_meter) > 0
+            }
+        
+        return availability
+
+    def _generate_data_availability_message(self, availability: Dict[str, Any], current_window: int) -> str:
+        """生成数据可用性消息
+        
+        Args:
+            availability: 数据可用性字典
+            current_window: 当前时间窗口ID
+        
+        Returns:
+            数据可用性消息字符串
+        """
+        if not availability:
+            return ""
+        
+        messages = []
+        
+        # 检查当前时间段的数据
+        current_key = f"window_{current_window}"
+        current_data = availability.get(current_key, {})
+        
+        if not current_data.get("has_any_data", False):
+            messages.append(f"警告：缺乏时间段{current_window}的数据，无法进行完整分析")
+        
+        # 检查关键数据类型
+        if not current_data.get("has_glucose", False):
+            messages.append(f"警告：时间段{current_window}缺乏血糖数据")
+        
+        if current_window in [1, 2] and not current_data.get("has_treatment", False):
+            messages.append(f"警告：时间段{current_window}缺乏餐食记录")
+        
+        if messages:
+            return "\n**数据可用性警告：**\n" + "\n".join(f"* {msg}" for msg in messages)
+        else:
+            return "\n**数据可用性：** 该时间段数据完整，可以进行分析"
+
+    def _generate_smart_analysis_guidance(self, analysis_time: datetime, data_completeness: Dict[str, Any] = None) -> str:
+        """生成智能分析指导"""
+        try:
+            current_hour = analysis_time.hour
+            
+            # 基于当前时间生成分析重点
+            if current_hour < 6:
+                guidance = "**分析重点时段：凌晨空腹期**\n"
+                guidance += "- 重点分析凌晨血糖控制情况和黎明现象\n"
+                guidance += "- 关注空腹血糖的稳定性和趋势\n"
+                guidance += "- 评估夜间基础胰岛素效果（如有）"
+            elif current_hour < 12:
+                guidance = "**分析重点时段：早餐后上午期**\n"
+                guidance += "- 重点分析早餐对血糖的影响\n"
+                guidance += "- 关注早餐后血糖峰值和持续时间\n"
+                guidance += "- 评估上午血糖的稳定性变化"
+            elif current_hour < 18:
+                guidance = "**分析重点时段：午餐后下午期**\n"
+                guidance += "- 重点分析午餐对血糖的影响\n"
+                guidance += "- 关注下午血糖波动模式\n"
+                guidance += "- 评估运动对下午血糖的影响（如有运动数据）"
+            else:
+                guidance = "**分析重点时段：晚餐后夜间期**\n"
+                guidance += "- 重点分析晚餐对血糖的影响\n"
+                guidance += "- 关注晚餐后血糖控制情况\n"
+                guidance += "- 评估睡前血糖安全性"
+            
+            # 基于数据完整性添加额外指导
+            if data_completeness:
+                completeness_score = data_completeness.get('completeness_score', 100)
+                if completeness_score < 70:
+                    guidance += "\n\n**数据完整性提醒：**\n"
+                    guidance += "- 当前数据完整性较低，分析结果可能不够准确\n"
+                    guidance += "- 请重点关注已有数据的趋势，避免过度解读\n"
+                    guidance += "- 建议补充更多数据后重新分析"
+                
+                missing_ranges = data_completeness.get('missing_time_ranges', [])
+                if missing_ranges:
+                    guidance += "\n\n**缺失数据提醒：**\n"
+                    guidance += "- 分析中存在数据缺失时段，请注意相关结论的局限性\n"
+                    guidance += "- 重点关注数据完整时段的血糖控制情况"
+            
+            return guidance
+            
+        except Exception as e:
+            logger.error(f"生成智能分析指导失败: {e}")
+            return "**分析重点：当前时间段血糖控制情况**"
+
+    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None, use_smart_range: bool = True, analysis_time: datetime = None, data_completeness: Dict[str, Any] = None) -> str:
+        """生成AI分析的prompt - 支持智能数据范围分析
         
         Args:
             glucose_data: 血糖数据
@@ -1905,12 +2540,77 @@ class NightscoutWebMonitor:
             activity_data: 活动数据
             meter_data: 指尖血糖数据
             days: 分析天数
-            time_window: 时间窗口ID (1, 2, 或 3)，如果不指定则使用通用分析
+            time_window: 时间窗口ID (1, 2, 或 3)，保持向后兼容性
+            use_smart_range: 是否使用智能数据范围，默认为True
+            analysis_time: 分析时间，默认为当前时间
+            data_completeness: 数据完整性检查结果
         """
         
         # 获取用户配置的时区偏移
         timezone_offset = self.config.get("basic", {}).get("timezone_offset", 8)
         timezone_name = f"UTC+{timezone_offset}" if timezone_offset >= 0 else f"UTC{timezone_offset}"
+        
+        # 生成智能数据范围分析提示
+        smart_range_info = ""
+        completeness_info = ""
+        
+        # 检查是否使用智能数据范围
+        if use_smart_range and data_completeness is not None:
+            # 获取智能数据范围信息
+            if analysis_time is None:
+                analysis_time = datetime.now()
+            
+            data_range = self.get_smart_data_range(analysis_time)
+            smart_range_info = f"**智能数据范围分析**：{data_range['range_description']}（预期时长：{data_range['expected_duration_hours']:.1f}小时）"
+            
+            # 添加数据完整性信息
+            if data_completeness:
+                completeness_score = data_completeness.get('completeness_score', 100)
+                missing_ranges = data_completeness.get('missing_time_ranges', [])
+                
+                completeness_info = f"\n**数据完整性评分**：{completeness_score}分"
+                
+                if missing_ranges:
+                    missing_info = []
+                    for missing_range in missing_ranges:
+                        start_time = missing_range.get('start', '00:00')
+                        end_time = missing_range.get('end', '23:59')
+                        severity = missing_range.get('severity', 'medium')
+                        missing_info.append(f"{start_time}-{end_time}({severity})")
+                    completeness_info += f"\n**缺失数据时段**：{', '.join(missing_info)}"
+                
+                if data_completeness.get('warnings'):
+                    warnings = data_completeness.get('warnings', [])
+                    completeness_info += f"\n**数据警告**：{'; '.join(warnings[:2])}"
+        else:
+            # 使用传统的时间窗口逻辑（向后兼容）
+            if time_window is not None:
+                # 检查数据可用性
+                availability = self._check_data_availability(glucose_data, treatment_data, 
+                                                           activity_data, meter_data, time_window)
+                
+                # 根据时间窗口规则过滤数据
+                filtered_glucose = []
+                filtered_treatment = []
+                filtered_activity = []
+                filtered_meter = []
+                
+                for window_id in range(1, time_window + 1):
+                    window_glucose = self._filter_data_by_time_window(glucose_data, window_id)
+                    window_treatment = self._filter_data_by_time_window(treatment_data, window_id)
+                    window_activity = self._filter_data_by_time_window(activity_data, window_id)
+                    window_meter = self._filter_data_by_time_window(meter_data, window_id)
+                    
+                    filtered_glucose.extend(window_glucose)
+                    filtered_treatment.extend(window_treatment)
+                    filtered_activity.extend(window_activity)
+                    filtered_meter.extend(window_meter)
+                
+                # 使用过滤后的数据
+                glucose_data = filtered_glucose
+                treatment_data = filtered_treatment
+                activity_data = filtered_activity
+                meter_data = filtered_meter
         
         # 转换血糖数据为mmol/L并转换时区
         glucose_mmol = []
@@ -2044,7 +2744,153 @@ class NightscoutWebMonitor:
         prompt_info = " ".join(personal_info)
         treatment_prompt = " ".join(treatment_info) if treatment_info else "无特殊治疗方案"
 
-        prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info} {treatment_prompt}
+        # 根据是否使用智能数据范围生成不同的AI提示词
+        if use_smart_range and smart_range_info:
+            # 使用智能数据范围分析
+            current_time = analysis_time or datetime.now()
+            today_date = current_time.strftime("%m月%d日")
+            
+            # 生成智能分析指导
+            analysis_guidance = self._generate_smart_analysis_guidance(current_time, data_completeness)
+            
+            prompt = f"""
+你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，使用智能数据范围分析方法。
+
+{smart_range_info}
+{completeness_info}
+{analysis_guidance}
+
+**智能分析要求：**
+- 基于从当天00:00到当前分析时间（{current_time.strftime('%H:%M')}）的数据进行分析
+- 重点分析该时间段内的血糖控制情况和趋势
+- 识别数据缺失对分析准确性的影响
+- 结合治疗数据和活动数据提供综合分析
+- 基于当前时间段提供针对性的改善建议
+
+**数据完整性考虑：**
+- 注意分析中可能存在的数据缺失时段
+- 评估缺失数据对分析结论的影响程度
+- 在分析中明确指出哪些结论基于完整数据，哪些可能受缺失数据影响
+
+请提供以下针对性分析：
+1. 当前时间段血糖控制状况评估
+2. 血糖波动模式和趋势分析
+3. 餐后血糖反应评估（基于可用数据）
+4. 数据完整性对分析结果的影响说明
+5. 基于当前时间段的改善建议
+6. 需要补充数据的关键时间段
+
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 对于缺失数据时段，应明确标注分析结论的局限性
+- 避免将AI推理数据呈现为实际测量结果
+
+请用专业但易懂的语言回答，控制在400字以内。"""
+        elif time_window is not None:
+            # 使用传统时间窗口分析（向后兼容）
+            current_time = datetime.now()
+            today_date = current_time.strftime("%m月%d日")
+            time_ranges = {
+                1: "00:00-14:59",
+                2: "00:00-20:59", 
+                3: "00:00-23:59"
+            }
+            time_range = time_ranges.get(time_window, "00:00-23:59")
+            
+            # 生成数据可用性消息
+            availability_message = self._generate_data_availability_message(availability, time_window)
+            
+            if time_window == 1:
+                prompt = f"""
+你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据（时间段1: {time_range}），重点关注凌晨和早餐的血糖以及早餐对血糖的影响。
+
+**时间段专注分析要求：**
+- 重点分析凌晨空腹血糖控制情况（00:00-06:00）
+- 详细分析早餐后血糖反应和峰值变化
+- 评估早餐对血糖的具体影响
+- 分析上午血糖的稳定性趋势
+- 如有午餐数据，简要分析午餐前血糖准备情况
+
+{availability_message}
+
+请提供以下针对性分析：
+1. 凌晨空腹血糖控制评估
+2. 早餐后血糖峰值和持续时间分析
+3. 早餐对血糖影响的量化评估
+4. 上午血糖波动模式
+5. 基于该时间段的改善建议
+
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 避免将AI推理数据呈现为实际测量结果
+
+请用专业但易懂的语言回答，控制在400字以内。"""
+            elif time_window == 2:
+                prompt = f"""
+你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据（时间段1+2: {time_range}），重点关注午餐后的血糖和午餐对血糖的影响，第一时间段数据作为辅助信息。
+
+**时间段专注分析要求：**
+- 重点分析午餐后血糖反应和控制效果
+- 详细分析下午血糖波动模式
+- 评估午餐对血糖的具体影响
+- 分析晚餐前血糖准备情况
+- 结合上午数据，分析全天前半段的血糖趋势
+- 评估运动对下午血糖的影响
+
+{availability_message}
+
+**数据使用说明：**
+- 00:00-14:59数据作为辅助参考信息
+- 15:00-20:59数据作为主要分析依据
+- 重点关注午餐相关的血糖变化
+
+请提供以下针对性分析：
+1. 午餐后血糖控制评估
+2. 下午血糖波动模式分析
+3. 午餐对血糖影响的量化评估
+4. 运动对下午血糖的影响分析
+5. 结合上午数据的整体趋势评估
+6. 基于该时间段的改善建议
+
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 避免将AI推理数据呈现为实际测量结果
+
+请用专业但易懂的语言回答，控制在400字以内。"""
+            else:  # time_window == 3
+                prompt = f"""
+你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据（全天: {time_range}），重点关注晚餐后的血糖和晚餐对血糖的影响，并提供全天血糖总结分析。
+
+**时间段专注分析要求：**
+- 重点分析晚餐后血糖反应和控制效果
+- 详细分析夜间血糖起始水平和趋势
+- 评估晚餐对血糖的具体影响
+- 提供全天血糖控制总结
+- 评估睡前血糖安全性
+- 基于全天数据提供整体改善建议
+
+{availability_message}
+
+请提供以下针对性分析：
+1. 晚餐后血糖控制评估
+2. 夜间血糖起始水平和趋势分析
+3. 晚餐对血糖影响的量化评估
+4. 全天血糖控制总结
+5. 睡前血糖安全性评估
+6. 基于全天数据的整体改善建议
+
+**重要提醒：**
+- 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
+- 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
+- 避免将AI推理数据呈现为实际测量结果
+
+请用专业但易懂的语言回答，控制在400字以内。"""
+        else:
+            # 使用原有的通用提示词
+            prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info} {treatment_prompt}
 
 注意：所有时间显示均为用户本地时间（{timezone_name}），请基于此时区进行分析。
 
@@ -2185,6 +3031,89 @@ class NightscoutWebMonitor:
 - 避免将AI推理数据呈现为实际测量结果
 
 请用专业但易懂的语言回答，控制在400字以内。"""
+        
+        # 为所有提示词添加数据展示部分
+        prompt += f"""
+
+注意：所有时间显示均为用户本地时间（{timezone_name}），请基于此时区进行分析。
+
+**重要要求：数据来源透明度**
+- 必须明确区分实际测量的血糖数据和AI推理/预测的数值
+- 对于任何非实际测量数据（如预测值、估算值、插值等），必须明确标注为"AI预测"、"估算值"或"推理数据"
+- 例如：如果提到8.9 mmol/L这个数值，必须说明是实际测量还是AI推理得到
+- 不得将AI推理数据混同为实际测量数据进行报告
+
+血糖数据（mmol/L）：
+"""
+
+        # 添加血糖数据
+        for entry in glucose_mmol[:20]:
+            direction_symbol = {
+                "Flat": "→",
+                "FortyFiveUp": "↗",
+                "SingleUp": "↑",
+                "DoubleUp": "↑↑",
+                "FortyFiveDown": "↘",
+                "SingleDown": "↓",
+                "DoubleDown": "↓↓"
+            }.get(entry["direction"], "")
+
+            prompt += f"• {entry['time']}: {entry['value']} mmol/L {direction_symbol}\n"
+
+        # 添加指尖血糖数据
+        if meter_mmol:
+            prompt += f"\n指尖血糖数据（mmol/L）：\n"
+            for entry in meter_mmol[:10]:
+                prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
+
+        if meals:
+            prompt += f"\n餐食记录（总碳水: {carbs_total}g, 总蛋白质: {protein_total}g, 总脂肪: {fat_total}g）：\n"
+
+            for meal in meals[:10]:
+                event_info = f"[{meal['event_type']}]" if meal['event_type'] else ""
+                notes_info = f" - {meal['notes']}" if meal['notes'] else ""
+
+                nutrition_parts = [f"{meal['carbs']}g碳水"]
+                if meal['protein'] > 0:
+                    nutrition_parts.append(f"{meal['protein']}g蛋白质")
+                if meal['fat'] > 0:
+                    nutrition_parts.append(f"{meal['fat']}g脂肪")
+                nutrition_info = ", ".join(nutrition_parts)
+
+                prompt += f"• {meal['time']}: {nutrition_info} {event_info}{notes_info}\n"
+        else:
+            prompt += f"\n餐食记录：无碳水摄入记录\n"
+
+        # 添加运动数据
+        if activities:
+            prompt += f"\n运动记录（总时长: {total_duration}分钟）：\n"
+            for activity in activities[:10]:
+                event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
+                notes_info = f" - {activity['notes']}" if activity['notes'] else ""
+                prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
+        else:
+            prompt += f"\n运动记录：无运动记录\n"
+
+        # 计算统计数据
+        if glucose_mmol:
+            values = [entry["value"] for entry in glucose_mmol]
+            avg_glucose = sum(values) / len(values)
+            max_glucose = max(values)
+            min_glucose = min(values)
+
+            in_range_count = sum(1 for v in values if 3.9 <= v <= 10.0)
+            in_range_percentage = (in_range_count / len(values)) * 100
+
+            prompt += f"""
+
+统计数据：
+• 平均血糖：{avg_glucose:.1f} mmol/L
+• 最高血糖：{max_glucose:.1f} mmol/L
+• 最低血糖：{min_glucose:.1f} mmol/L
+• 目标范围内比例：{in_range_percentage:.1f}% ({in_range_count}/{len(values)})
+• 总测量次数：{len(values)}次
+• 指尖血糖记录：{len(meter_mmol)}次
+• 运动记录：{len(activities)}次"""
 
         return prompt
 
