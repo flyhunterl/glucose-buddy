@@ -717,13 +717,13 @@
 /* 彩色打印样式 - 保持原有颜色，去除灰色覆盖层 */
 @media print {
     body.print-color {
-        /* 强制背景为纯白色，去除灰色覆盖层 */
-        background-color: #ffffff !important;
+        /* 确保背景透明，让原有颜色显示 */
+        background-color: transparent !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
     
-    /* 确保所有元素都有白色背景 */
+    /* 确保背景透明，不覆盖原有颜色 */
     body.print-color *,
     body.print-color .card,
     body.print-color .card-header,
@@ -734,14 +734,14 @@
     body.print-color .container,
     body.print-color .row,
     body.print-color .col {
-        background-color: #ffffff !important;
-        background: #ffffff !important;
+        background-color: transparent !important;
+        background: transparent !important;
         background-image: none !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
     
-    /* 保持原有的文字颜色 */
+    /* 保持并强化原有的文字颜色 */
     body.print-color *,
     body.print-color .card,
     body.print-color .card-header,
@@ -750,6 +750,37 @@
     body.print-color .table td,
     body.print-color .table th {
         color: inherit !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    /* 确保Bootstrap颜色类在打印时正确显示 */
+    body.print-color .text-primary {
+        color: #0066cc !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    body.print-color .text-success {
+        color: #28a745 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    body.print-color .text-danger {
+        color: #dc3545 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    body.print-color .text-warning {
+        color: #ffc107 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+    
+    body.print-color .text-info {
+        color: #17a2b8 !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
