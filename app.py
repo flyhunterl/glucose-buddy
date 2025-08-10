@@ -554,6 +554,117 @@ class NightscoutWebMonitor:
             logger.error(f"时区转换失败: {utc_time_str}, 错误: {e}")
             return utc_time_str
 
+    def get_time_window_from_analysis_time(self, analysis_time: datetime = None) -> int:
+        """
+        根据分析时间确定时间窗口ID
+        
+        时间窗口定义:
+        - 窗口1: 00:00-14:59 (凌晨至下午，专注空腹+早餐后血糖)
+        - 窗口2: 15:00-20:59 (下午至晚上，专注午餐时间血糖模式)
+        - 窗口3: 21:00-23:59 (夜间，专注晚餐反应+全天总结)
+        
+        Args:
+            analysis_time: 分析时间，默认为当前时间
+            
+        Returns:
+            int: 时间窗口ID (1, 2, 或 3)
+        """
+        try:
+            if analysis_time is None:
+                analysis_time = datetime.now()
+            
+            # 获取小时数用于判断时间窗口
+            hour = analysis_time.hour
+            
+            # 根据时间窗口定义返回对应的ID
+            if 0 <= hour <= 14:
+                return 1  # 窗口1: 00:00-14:59
+            elif 15 <= hour <= 20:
+                return 2  # 窗口2: 15:00-20:59
+            else:  # 21 <= hour <= 23
+                return 3  # 窗口3: 21:00-23:59
+                
+        except Exception as e:
+            logger.error(f"确定时间窗口失败: {e}")
+            # 默认返回窗口1
+            return 1
+
+    def filter_data_by_time_window(self, data: List[Dict], time_window: int, data_type: str) -> List[Dict]:
+        """
+        根据时间窗口过滤数据
+        
+        Args:
+            data: 原始数据列表
+            time_window: 时间窗口ID (1, 2, 或 3)
+            data_type: 数据类型 ("glucose", "treatment", "activity", "meter")
+            
+        Returns:
+            List[Dict]: 过滤后的数据列表
+        """
+        try:
+            if not data:
+                return []
+            
+            # 治疗数据不过滤，返回全日数据
+            if data_type == "treatment":
+                logger.info("治疗数据不进行时间窗口过滤，返回全日数据")
+                return data
+            
+            # 定义时间窗口的时间范围
+            time_ranges = {
+                1: (0, 14),     # 窗口1: 00:00-14:59
+                2: (15, 20),    # 窗口2: 15:00-20:59
+                3: (21, 23)     # 窗口3: 21:00-23:59
+            }
+            
+            if time_window not in time_ranges:
+                logger.warning(f"无效的时间窗口ID: {time_window}，返回全部数据")
+                return data
+            
+            start_hour, end_hour = time_ranges[time_window]
+            filtered_data = []
+            
+            for item in data:
+                # 根据数据类型获取时间字段
+                time_field = ""
+                if data_type in ["glucose", "activity"]:
+                    time_field = "shanghai_time"
+                elif data_type == "meter":
+                    time_field = "shanghai_time"
+                
+                if not time_field:
+                    logger.warning(f"未知数据类型: {data_type}，返回全部数据")
+                    return data
+                
+                time_str = item.get(time_field, "")
+                if not time_str:
+                    continue
+                
+                try:
+                    # 解析上海时间
+                    if len(time_str) >= 19:
+                        dt = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
+                    else:
+                        logger.warning(f"时间格式不正确: {time_str}")
+                        continue
+                    
+                    hour = dt.hour
+                    
+                    # 检查是否在时间窗口范围内
+                    if start_hour <= hour <= end_hour:
+                        filtered_data.append(item)
+                        
+                except ValueError as e:
+                    logger.warning(f"解析时间失败: {time_str}, 错误: {e}")
+                    continue
+            
+            logger.info(f"时间窗口{time_window}过滤结果: {data_type}数据从{len(data)}条过滤为{len(filtered_data)}条")
+            return filtered_data
+            
+        except Exception as e:
+            logger.error(f"时间窗口数据过滤失败: {e}")
+            return data
+
     async def fetch_nightscout_data(self, start_date: str, end_date: str) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
         """从Nightscout获取指定时间范围的数据"""
         try:
@@ -732,7 +843,8 @@ class NightscoutWebMonitor:
             await self.save_meter_data(meter_data)
 
         if glucose_data:
-            analysis = await self.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1)
+            # 使用基于时间的分析（默认启用时间窗口分析）
+            analysis = await self.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True)
             
             # 保存分析结果到消息表
             self.save_message("analysis", "血糖分析报告", analysis)
@@ -1379,10 +1491,49 @@ class NightscoutWebMonitor:
                     error_text = await response.text()
                     raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
 
-    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
-        """获取AI分析结果"""
+    async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, use_time_window: bool = True) -> str:
+        """获取AI分析结果
+        
+        Args:
+            glucose_data: 血糖数据
+            treatment_data: 治疗数据
+            activity_data: 活动数据
+            meter_data: 指尖血糖数据
+            days: 分析天数
+            use_time_window: 是否使用时间窗口分析，默认为True
+        """
         try:
-            prompt = self.get_analysis_prompt(glucose_data, treatment_data, activity_data, meter_data, days)
+            time_window = None
+            filtered_glucose_data = glucose_data
+            filtered_activity_data = activity_data
+            filtered_meter_data = meter_data
+            
+            # 如果启用时间窗口分析，则进行数据过滤
+            if use_time_window:
+                # 检测当前时间窗口
+                current_time = datetime.now()
+                time_window = self.get_time_window_from_analysis_time(current_time)
+                logger.info(f"当前时间窗口: {time_window} (时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                
+                # 根据时间窗口过滤数据
+                filtered_glucose_data = self.filter_data_by_time_window(glucose_data, time_window, "glucose")
+                filtered_activity_data = self.filter_data_by_time_window(activity_data, time_window, "activity")
+                filtered_meter_data = self.filter_data_by_time_window(meter_data, time_window, "meter")
+                
+                # 治疗数据保持全日数据，不进行时间窗口过滤
+                logger.info(f"时间窗口{time_window}数据过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+            
+            # 生成分析提示词
+            prompt = self.get_analysis_prompt(
+                filtered_glucose_data, 
+                treatment_data, 
+                filtered_activity_data, 
+                filtered_meter_data, 
+                days, 
+                time_window
+            )
+            
+            # 获取AI分析结果
             ai_analysis = await self._make_ai_analysis_request(prompt)
             return ai_analysis
             
@@ -1539,8 +1690,17 @@ class NightscoutWebMonitor:
 
         return basic_stats
 
-    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1) -> str:
-        """生成AI分析的prompt"""
+    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None) -> str:
+        """生成AI分析的prompt
+        
+        Args:
+            glucose_data: 血糖数据
+            treatment_data: 治疗数据
+            activity_data: 活动数据
+            meter_data: 指尖血糖数据
+            days: 分析天数
+            time_window: 时间窗口ID (1, 2, 或 3)，如果不指定则使用通用分析
+        """
 
         # 转换血糖数据为mmol/L并转换时区
         glucose_mmol = []
@@ -1737,6 +1897,34 @@ class NightscoutWebMonitor:
             in_range_count = sum(1 for v in values if 3.9 <= v <= 10.0)
             in_range_percentage = (in_range_count / len(values)) * 100
 
+            # 添加时间窗口特定的分析指导
+            time_window_guidance = ""
+            if time_window is not None:
+                current_time = datetime.now()
+                time_descriptions = {
+                    1: """当前为时间窗口1 (00:00-14:59)，请重点关注：
+- 凌晨空腹血糖控制情况
+- 早餐后血糖反应和峰值
+- 上午血糖稳定性
+- 如有午餐数据，请分析午餐前血糖准备情况
+- 识别和报告该时间段内任何缺失的关键数据""",
+                    2: """当前为时间窗口2 (15:00-20:59)，请重点关注：
+- 午餐后血糖反应和控制
+- 下午血糖波动模式
+- 晚餐前血糖准备情况
+- 如有晚餐数据，请分析晚餐后初步反应
+- 运动对下午血糖的影响
+- 识别和报告该时间段内任何缺失的关键数据""",
+                    3: """当前为时间窗口3 (21:00-23:59)，请重点关注：
+- 晚餐后血糖反应和控制
+- 夜间血糖起始水平和趋势
+- 全天血糖控制总结
+- 睡前血糖安全性评估
+- 基于全天数据的整体改善建议
+- 识别和报告任何缺失的关键数据（特别是晚餐数据）"""
+                }
+                time_window_guidance = time_descriptions.get(time_window, "")
+            
             prompt += f"""
 
 统计数据：
@@ -1747,6 +1935,8 @@ class NightscoutWebMonitor:
 • 总测量次数：{len(values)}次
 • 指尖血糖记录：{len(meter_mmol)}次
 • 运动记录：{len(activities)}次
+
+{time_window_guidance}
 
 请提供以下分析：
 1. 血糖控制状况评估
@@ -4586,7 +4776,8 @@ def api_analysis():
 
     try:
         try:
-            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days))
+            # 使用基于时间的分析（默认启用时间窗口分析）
+            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, days, use_time_window=True))
             # 保存分析结果到消息表
             monitor.save_message("analysis", "血糖分析报告", analysis)
             return jsonify({'analysis': analysis})
