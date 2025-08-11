@@ -872,25 +872,23 @@ class NightscoutWebMonitor:
             # 分析数据密度
             data_density = self._analyze_data_density(all_data, start_time, end_time)
             
-            # 检测缺失的时间段
-            missing_time_ranges = self._detect_missing_time_ranges(all_data, start_time, end_time)
+            # 对于动态数据范围，不检测缺失时间段（数据截止到当前时间是正常的）
+            missing_time_ranges = []  # 清空缺失时间段列表
             
-            # 计算完整性评分
+            # 计算完整性评分（基于现有数据，不考虑缺失时间段）
             completeness_score = self._calculate_completeness_score(
-                all_data, expected_duration_hours, data_density, missing_time_ranges
+                all_data, expected_duration_hours, data_density, []
             )
             
             # 生成警告信息
             warnings = []
             if completeness_score < 70:
                 warnings.append("数据完整性较低，分析结果可能不够准确")
-            if len(missing_time_ranges) > 0:
-                warnings.append(f"检测到{len(missing_time_ranges)}个缺失的数据时段")
             if data_density.get("glucose_density", 0) < 0.5:
                 warnings.append("血糖数据密度较低，建议增加测量频率")
             
-            # 判断是否完整
-            is_complete = completeness_score >= 70 and len(missing_time_ranges) == 0
+            # 对于动态数据范围，只要有一定数据就认为是完整的
+            is_complete = completeness_score >= 50 and len(all_data) > 0
             
             return {
                 "is_complete": is_complete,
@@ -1167,9 +1165,10 @@ class NightscoutWebMonitor:
             if not data:
                 return []
             
-            # 治疗数据不过滤，返回全日数据（与原有逻辑保持一致）
-            if data_type == "treatment":
-                logger.info("治疗数据不进行动态范围过滤，返回全日数据")
+            # 治疗数据和血糖数据都不过滤，返回全日数据
+            # 修复：血糖数据也应该返回全日数据，否则AI能看到治疗记录但看不到对应血糖数据
+            if data_type in ["treatment", "glucose"]:
+                logger.info(f"{data_type}数据不进行动态范围过滤，返回全日数据")
                 return data
             
             start_time = data_range["start_time"]
@@ -1833,7 +1832,7 @@ class NightscoutWebMonitor:
             'dinner': {'meal_start': 17, 'meal_end': 19, 'fallback_start': 18, 'fallback_end': 20}
         }
         
-        SEARCH_WINDOW_MINUTES = 30
+        SEARCH_WINDOW_MINUTES = 45  # 增加搜索窗口到45分钟，更好适应5分钟间隔的数据
     
     def _get_valid_timezone_offset(self) -> int:
         """获取并验证时区偏移值
@@ -2091,7 +2090,17 @@ class NightscoutWebMonitor:
                                 window_glucose,
                                 key=lambda x: abs(x['timestamp'] - target_time)
                             )
+                            time_diff = abs(closest_glucose['timestamp'] - target_time)
                             postprandial_glucose = self._sanitize_glucose_value(closest_glucose['value'])
+                            
+                            logger.info(f"找到餐后血糖 - 餐食类型: {meal_type}, 目标时间: {target_time.strftime('%H:%M')}, "
+                                      f"实际时间: {closest_glucose['timestamp'].strftime('%H:%M')}, "
+                                      f"时间差: {time_diff.total_seconds()/60:.1f}分钟, "
+                                      f"血糖值: {postprandial_glucose}")
+                        else:
+                            logger.warning(f"未找到餐后血糖 - 餐食类型: {meal_type}, 目标时间: {target_time.strftime('%H:%M')}, "
+                                         f"搜索窗口: {time_window_start.strftime('%H:%M')}-{time_window_end.strftime('%H:%M')}, "
+                                         f"可用血糖数据: {len(day_glucose)}条")
             
             # 如果没有找到基于餐食时间的餐后血糖，使用固定时间窗口逻辑
             if postprandial_glucose is None:
@@ -2374,8 +2383,12 @@ class NightscoutWebMonitor:
             utc8_time = current_time + timedelta(hours=timezone_offset)
             utc8_time = utc8_time.replace(tzinfo=None)  # 移除时区信息以保持一致性
             
-            data_completeness = None
+            # 禁用时间窗口分段逻辑，始终使用动态数据范围
             time_window = None
+            use_time_window = False
+            use_smart_range = True
+            
+            data_completeness = None
             filtered_glucose_data = glucose_data
             filtered_activity_data = activity_data
             filtered_meter_data = meter_data
@@ -2391,8 +2404,8 @@ class NightscoutWebMonitor:
                 filtered_activity_data = self.filter_data_by_dynamic_range(activity_data, dynamic_range, "activity")
                 filtered_meter_data = self.filter_data_by_dynamic_range(meter_data, dynamic_range, "meter")
                 
-                # 治疗数据保持全日数据，不进行动态范围过滤
-                logger.info(f"动态数据范围过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+                # 治疗数据和血糖数据保持全日数据，活动数据和指尖血糖数据进行动态范围过滤
+                logger.info(f"动态数据范围过滤完成 - 血糖: {len(filtered_glucose_data)}(全日), 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
                 
                 # 检查数据完整性
                 data_completeness = self.check_data_completeness(
@@ -3070,26 +3083,32 @@ class NightscoutWebMonitor:
         data_range = self.get_dynamic_data_range(utc8_time)
         dynamic_range_info = f"**动态数据范围分析**：{data_range['range_description']}（预期时长：{data_range['expected_duration_hours']:.1f}小时）"
         
-        # 添加当前时间信息
+        # 添加当前时间信息和餐食时间判断逻辑
         current_time_info = f"**当前时间**：{data_range['current_time_for_ai']}"
         current_time_info += f"\n**时区信息**：{data_range['timezone_info']}"
         current_time_info += f"\n**数据截止时间**：当日00:00至当前时间，数据分析基于此时间范围内的全部数据。"
         
+        # 添加餐食时间判断逻辑
+        current_hour = data_range['end_time'].hour
+        meal_time_analysis = ""
+        if current_hour < 10:
+            meal_time_analysis = "\n**餐食分析时段**：当前时间为早晨，主要分析早餐时段数据，午餐和晚餐数据尚未产生。"
+        elif current_hour < 15:
+            meal_time_analysis = "\n**餐食分析时段**：当前时间为中午，可分析早餐和午餐时段数据，晚餐数据尚未产生。"
+        elif current_hour < 20:
+            meal_time_analysis = "\n**餐食分析时段**：当前时间为下午，可分析早餐、午餐和晚餐时段数据。"
+        else:
+            meal_time_analysis = "\n**餐食分析时段**：当前时间为晚上，可分析全天的早餐、午餐和晚餐数据。"
+        
+        current_time_info += meal_time_analysis
+        
         # 添加数据完整性信息
         if data_completeness:
             completeness_score = data_completeness.get('completeness_score', 100)
-            missing_ranges = data_completeness.get('missing_time_ranges', [])
+            # 对于动态数据范围，不再显示缺失时间段（数据截止到当前时间是正常的）
+            missing_ranges = []  # 清空缺失时间段
             
             completeness_info = f"\n**数据完整性评分**：{completeness_score}分"
-            
-            if missing_ranges:
-                missing_info = []
-                for missing_range in missing_ranges:
-                    start_time = missing_range.get('start', '00:00')
-                    end_time = missing_range.get('end', '23:59')
-                    severity = missing_range.get('severity', 'medium')
-                    missing_info.append(f"{start_time}-{end_time}({severity})")
-                completeness_info += f"\n**缺失数据时段**：{', '.join(missing_info)}"
             
             if data_completeness.get('warnings'):
                 warnings = data_completeness.get('warnings', [])
@@ -3251,27 +3270,28 @@ class NightscoutWebMonitor:
 - 基于当前动态时间段提供针对性的改善建议
 
 **数据完整性考虑：**
-- 注意分析中可能存在的数据缺失时段
-- 评估缺失数据对分析结论的影响程度
-- 在分析中明确指出哪些结论基于完整数据，哪些可能受缺失数据影响
-- 当前数据范围外的数据不纳入分析，这是数据截止的原因而非数据缺失
+- 当前分析基于从00:00到当前时间的完整数据，不存在数据缺失问题
+- 当前时间之后的数据尚未产生，这是正常的时间进程而非数据缺失
+- 重点分析现有数据的模式和趋势，不要讨论"缺失数据"或"未提供数据"
 
 请提供以下针对性分析：
 1. 当前动态时间段血糖控制状况评估
 2. 血糖波动模式和趋势分析
-3. 餐后血糖反应评估（基于可用数据）
-4. 数据完整性对分析结果的影响说明
+3. 餐后血糖反应评估（根据当前时间判断可分析的餐次）：
+   - 如果当前时间<10点：重点分析早餐后血糖反应
+   - 如果当前时间10-15点：分析早餐和午餐后血糖反应
+   - 如果当前时间15-20点：分析早餐、午餐和晚餐后血糖反应
+   - 如果当前时间≥20点：分析全天的早餐、午餐、晚餐后血糖反应
+4. 基于现有数据的综合分析
 5. 基于当前动态时间段的改善建议
-6. 需要补充数据的关键时间段
 
 {key_glucose_info}
 
 **重要提醒：**
 - 所有提到的血糖数值必须明确区分是实际测量还是AI推理/预测
 - 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
-- 对于缺失数据时段，应明确标注分析结论的局限性
 - 避免将AI推理数据呈现为实际测量结果
-- 当前时间点之后的数据暂未获取，不是数据缺失，请勿误解
+- 分析结论仅基于当前时间范围内已产生的数据
 
 请用专业但易懂的语言回答。"""
 
@@ -3285,8 +3305,8 @@ class NightscoutWebMonitor:
         
         prompt += "血糖数据（mmol/L）：\n"
 
-        # 添加血糖数据
-        for entry in glucose_mmol[:20]:
+        # 添加血糖数据（传递所有血糖数据，确保AI能看到完整的时间段）
+        for entry in glucose_mmol:
             direction_symbol = {
                 "Flat": "→",
                 "FortyFiveUp": "↗",
@@ -3299,16 +3319,16 @@ class NightscoutWebMonitor:
 
             prompt += f"• {entry['time']}: {entry['value']} mmol/L {direction_symbol}\n"
 
-        # 添加指尖血糖数据
+        # 添加指尖血糖数据（传递所有指尖血糖数据）
         if meter_mmol:
             prompt += f"\n指尖血糖数据（mmol/L）：\n"
-            for entry in meter_mmol[:10]:
+            for entry in meter_mmol:
                 prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
 
         if meals:
             prompt += f"\n餐食记录（总碳水: {carbs_total}g, 总蛋白质: {protein_total}g, 总脂肪: {fat_total}g）：\n"
 
-            for meal in meals[:10]:
+            for meal in meals:
                 event_info = f"[{meal['event_type']}]" if meal['event_type'] else ""
                 notes_info = f" - {meal['notes']}" if meal['notes'] else ""
 
@@ -3326,7 +3346,7 @@ class NightscoutWebMonitor:
         # 添加运动数据
         if activities:
             prompt += f"\n运动记录（总时长: {total_duration}分钟）：\n"
-            for activity in activities[:10]:
+            for activity in activities:
                 event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
                 notes_info = f" - {activity['notes']}" if activity['notes'] else ""
                 prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
@@ -3413,68 +3433,6 @@ class NightscoutWebMonitor:
 - 避免将AI推理数据呈现为实际测量结果
 
 请用专业但易懂的语言回答。"""
-        
-        # 为所有提示词添加数据展示部分
-        prompt += f"""
-
-注意：所有时间显示均为用户本地时间（{timezone_name}），请基于此时区进行分析。
-
-**重要要求：数据来源透明度**
-- 必须明确区分实际测量的血糖数据和AI推理/预测的数值
-- 对于任何非实际测量数据（如预测值、估算值、插值等），必须明确标注为"AI预测"、"估算值"或"推理数据"
-- 例如：如果提到8.9 mmol/L这个数值，必须说明是实际测量还是AI推理得到
-- 不得将AI推理数据混同为实际测量数据进行报告
-
-血糖数据（mmol/L）：
-"""
-
-        # 添加血糖数据
-        for entry in glucose_mmol[:20]:
-            direction_symbol = {
-                "Flat": "→",
-                "FortyFiveUp": "↗",
-                "SingleUp": "↑",
-                "DoubleUp": "↑↑",
-                "FortyFiveDown": "↘",
-                "SingleDown": "↓",
-                "DoubleDown": "↓↓"
-            }.get(entry["direction"], "")
-
-            prompt += f"• {entry['time']}: {entry['value']} mmol/L {direction_symbol}\n"
-
-        # 添加指尖血糖数据
-        if meter_mmol:
-            prompt += f"\n指尖血糖数据（mmol/L）：\n"
-            for entry in meter_mmol[:10]:
-                prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
-
-        if meals:
-            prompt += f"\n餐食记录（总碳水: {carbs_total}g, 总蛋白质: {protein_total}g, 总脂肪: {fat_total}g）：\n"
-
-            for meal in meals[:10]:
-                event_info = f"[{meal['event_type']}]" if meal['event_type'] else ""
-                notes_info = f" - {meal['notes']}" if meal['notes'] else ""
-
-                nutrition_parts = [f"{meal['carbs']}g碳水"]
-                if meal['protein'] > 0:
-                    nutrition_parts.append(f"{meal['protein']}g蛋白质")
-                if meal['fat'] > 0:
-                    nutrition_parts.append(f"{meal['fat']}g脂肪")
-                nutrition_info = ", ".join(nutrition_parts)
-
-                prompt += f"• {meal['time']}: {nutrition_info} {event_info}{notes_info}\n"
-        else:
-            prompt += f"\n餐食记录：无碳水摄入记录\n"
-
-        # 添加运动数据
-        if activities:
-            prompt += f"\n运动记录（总时长: {total_duration}分钟）：\n"
-            for activity in activities[:10]:
-                event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
-                notes_info = f" - {activity['notes']}" if activity['notes'] else ""
-                prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
-        else:
-            prompt += f"\n运动记录：无运动记录\n"
 
         # 计算统计数据
         if glucose_mmol:
@@ -3684,19 +3642,19 @@ class NightscoutWebMonitor:
 - 例如：如果提到8.9 mmol/L这个数值，必须说明是实际测量还是AI推理得到
 - 不得将AI推理数据混同为实际测量数据进行报告
 
-血糖数据（mmol/L, 最近20条）:
+血糖数据（mmol/L）:
 """
-            for entry in glucose_mmol[:20]:
+            for entry in glucose_mmol:
                 prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
 
             if meter_mmol:
-                prompt += f"\n指尖血糖数据（mmol/L, 最近10条）:\n"
-                for entry in meter_mmol[:10]:
+                prompt += f"\n指尖血糖数据（mmol/L）:\n"
+                for entry in meter_mmol:
                     prompt += f"• {entry['time']}: {entry['value']} mmol/L\n"
 
             if activities:
-                prompt += f"\n运动数据（最近10条）:\n"
-                for activity in activities[:10]:
+                prompt += f"\n运动数据:\n"
+                for activity in activities:
                     event_info = f"[{activity['event_type']}]" if activity['event_type'] else ""
                     notes_info = f" - {activity['notes']}" if activity['notes'] else ""
                     prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
