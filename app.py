@@ -735,6 +735,76 @@ class NightscoutWebMonitor:
             logger.error(f"时间窗口数据过滤失败: {e}")
             return data
 
+    def filter_data_by_full_day_range(self, data: List[Dict], analysis_time: datetime, data_type: str) -> List[Dict]:
+        """
+        根据全日数据范围过滤数据（从00:00到分析时间）
+        
+        Args:
+            data: 原始数据列表
+            analysis_time: 分析时间
+            data_type: 数据类型 ("glucose", "treatment", "activity", "meter")
+            
+        Returns:
+            List[Dict]: 过滤后的数据列表（00:00-分析时间）
+        """
+        try:
+            if not data:
+                return []
+            
+            # 治疗数据不过滤，返回全日数据
+            if data_type == "treatment":
+                logger.info("治疗数据不进行时间范围过滤，返回全日数据")
+                return data
+            
+            # 计算当天的开始时间（00:00）
+            start_time = analysis_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            filtered_data = []
+            for item in data:
+                # 根据数据类型获取时间字段
+                time_field = ""
+                if data_type in ["glucose", "activity"]:
+                    time_field = "shanghai_time"
+                elif data_type == "meter":
+                    time_field = "shanghai_time"
+                
+                if not time_field:
+                    logger.warning(f"未知数据类型: {data_type}，返回全部数据")
+                    return data
+                
+                time_str = item.get(time_field, "")
+                if not time_str:
+                    continue
+                
+                try:
+                    # 解析上海时间
+                    if len(time_str) >= 19:
+                        dt = datetime.strptime(time_str[:19], '%Y-%m-%d %H:%M:%S')
+                    else:
+                        logger.warning(f"时间格式不正确: {time_str}")
+                        continue
+                    
+                    # 检查是否在00:00到分析时间之间
+                    if start_time <= dt <= analysis_time:
+                        # 为血糖数据添加小时字段
+                        if data_type == "glucose":
+                            item_copy = item.copy()
+                            item_copy['hour'] = dt.hour
+                            filtered_data.append(item_copy)
+                        else:
+                            filtered_data.append(item)
+                        
+                except ValueError as e:
+                    logger.warning(f"解析时间失败: {time_str}, 错误: {e}")
+                    continue
+            
+            logger.info(f"全日数据范围过滤结果: {data_type}数据从{len(data)}条过滤为{len(filtered_data)}条 (00:00-{analysis_time.strftime('%H:%M')})")
+            return filtered_data
+            
+        except Exception as e:
+            logger.error(f"全日数据范围过滤失败: {e}")
+            return data
+
     def check_data_completeness(self, glucose_data: List[Dict], treatment_data: List[Dict], 
                                activity_data: List[Dict], meter_data: List[Dict], 
                                data_range: Dict[str, Any]) -> Dict[str, Any]:
@@ -1807,7 +1877,7 @@ class NightscoutWebMonitor:
         """计算空腹血糖值（早上6:00 AM，UTC+8）
         
         Args:
-            glucose_data: 血糖数据列表
+            glucose_data: 血糖数据列表（可能是已过滤的全日数据）
             target_date: 目标日期
             
         Returns:
@@ -1822,8 +1892,43 @@ class NightscoutWebMonitor:
             # 获取有效的时区偏移
             timezone_offset = self._get_valid_timezone_offset()
             
-            # 筛选目标日期的血糖数据
-            day_glucose = self._filter_glucose_by_date(glucose_data, target_date, timezone_offset)
+            # 检查数据是否已经按日期过滤（优化：如果数据量小，直接使用）
+            target_date_str = target_date.strftime('%Y-%m-%d')
+            
+            # 如果数据量较小（<=100条），直接在现有数据中查找目标日期
+            if len(glucose_data) <= 100:
+                day_glucose = []
+                for g in glucose_data:
+                    # 检查数据是否已经有hour字段（表示已经经过filter_data_by_full_day_range处理）
+                    if 'hour' in g:
+                        # 数据已经有时区信息，直接使用
+                        day_glucose.append(g)
+                    elif 'timestamp' in g and g['timestamp']:
+                        glucose_date_str = g['timestamp'].strftime('%Y-%m-%d')
+                        if glucose_date_str == target_date_str:
+                            local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                            if local_hour is not None:
+                                g_copy = g.copy()
+                                g_copy['hour'] = local_hour
+                                day_glucose.append(g_copy)
+                            else:
+                                day_glucose.append(g)
+                    elif 'date_string' in g and g['date_string'] == target_date_str:
+                        if 'hour' not in g and 'timestamp' in g and g['timestamp']:
+                            local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                            if local_hour is not None:
+                                g_copy = g.copy()
+                                g_copy['hour'] = local_hour
+                                day_glucose.append(g_copy)
+                            else:
+                                day_glucose.append(g)
+                        else:
+                            day_glucose.append(g)
+                
+                logger.info(f"从已过滤数据中查找空腹血糖 - 目标日期: {target_date_str}, 找到: {len(day_glucose)}条数据")
+            else:
+                # 如果数据量大，使用传统方法
+                day_glucose = self._filter_glucose_by_date(glucose_data, target_date, timezone_offset)
             
             # 计算空腹血糖：早上6:00 AM，搜索窗口5:00-7:00 AM
             fasting_glucose = None
@@ -2239,6 +2344,29 @@ class NightscoutWebMonitor:
                 use_smart_range = False
                 logger.info("智能数据范围功能已禁用，将使用传统时间窗口分析")
             
+            # 优先使用全日数据范围分析（新功能）
+            use_full_day_range = True  # 默认启用全日数据范围分析
+            if use_full_day_range:
+                try:
+                    logger.info(f"使用全日数据范围分析 (00:00-{current_time.strftime('%H:%M')})")
+                    
+                    # 使用全日数据范围过滤数据（从00:00到当前分析时间）
+                    filtered_glucose_data = self.filter_data_by_full_day_range(glucose_data, current_time, "glucose")
+                    filtered_activity_data = self.filter_data_by_full_day_range(activity_data, current_time, "activity")
+                    filtered_meter_data = self.filter_data_by_full_day_range(meter_data, current_time, "meter")
+                    
+                    # 治疗数据保持全日数据，不进行过滤
+                    logger.info(f"全日数据范围过滤完成 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+                    
+                    # 成功使用全日数据范围分析后，跳过其他数据过滤方式
+                    use_smart_range = False
+                    use_time_window = False
+                    logger.info("全日数据范围分析成功，跳过智能数据范围和时间窗口分析")
+                    
+                except Exception as e:
+                    logger.error(f"全日数据范围分析失败: {e}，将回退到智能数据范围分析")
+                    use_full_day_range = False
+            
             # 优先使用智能数据范围分析
             if use_smart_range:
                 try:
@@ -2323,7 +2451,7 @@ class NightscoutWebMonitor:
                 # 计算空腹血糖（6:00 AM）
                 fasting_values = []
                 for date in analysis_dates:
-                    fasting_value = self.calculate_fasting_glucose(glucose_data, date)
+                    fasting_value = self.calculate_fasting_glucose(filtered_glucose_data, date)
                     if fasting_value is not None:
                         fasting_values.append(fasting_value)
                 
@@ -2343,8 +2471,8 @@ class NightscoutWebMonitor:
                     meal_values = []
                     logger.debug(f"开始计算{meal_type}餐后血糖，分析日期数: {len(analysis_dates)}")
                     for date in analysis_dates:
-                        postprandial_value = self.calculate_postprandial_glucose(
-                            glucose_data, treatment_data, date, meal_type
+                        postprandial_value = self.calculate_postprandial_glucose_from_filtered_data(
+                            filtered_glucose_data, treatment_data, date, meal_type
                         )
                         if postprandial_value is not None:
                             meal_values.append(postprandial_value)
@@ -2391,6 +2519,7 @@ class NightscoutWebMonitor:
                 days, 
                 time_window,
                 use_smart_range,
+                use_full_day_range,
                 current_time,
                 data_completeness,
                 key_glucose_values
@@ -2897,8 +3026,219 @@ class NightscoutWebMonitor:
             logger.error(f"生成智能分析指导失败: {e}")
             return "**分析重点：当前时间段血糖控制情况**"
 
-    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None, use_smart_range: bool = True, analysis_time: datetime = None, data_completeness: Dict[str, Any] = None, key_glucose_values: Dict[str, Any] = None) -> str:
-        """生成AI分析的prompt - 支持智能数据范围分析
+    def calculate_postprandial_glucose_from_filtered_data(self, filtered_glucose_data: List[Dict], meals_data: List[Dict], target_date: datetime, meal_type: str) -> Optional[float]:
+        """从已过滤的数据中计算餐后2小时血糖值（优化版）
+        
+        Args:
+            filtered_glucose_data: 已经按全日范围过滤的血糖数据
+            meals_data: 餐食数据列表
+            target_date: 目标日期
+            meal_type: 餐食类型 ('breakfast', 'lunch', 'dinner')
+            
+        Returns:
+            餐后2小时血糖值，如果没有找到则返回None
+        """
+        try:
+            # 验证输入数据
+            if not self._validate_glucose_data(filtered_glucose_data):
+                logger.warning("已过滤的血糖数据验证失败")
+                return None
+            
+            # 获取有效的时区偏移
+            timezone_offset = self._get_valid_timezone_offset()
+            
+            # 检查餐食类型是否支持
+            if meal_type not in self.TimeWindows.MEAL_WINDOWS:
+                logger.error(f"不支持的餐食类型: {meal_type}")
+                return None
+            
+            time_window = self.TimeWindows.MEAL_WINDOWS[meal_type]
+            
+            # 从已过滤的数据中筛选目标日期的数据（避免重新筛选）
+            target_date_str = target_date.strftime('%Y-%m-%d')
+            day_glucose = []
+            
+            for g in filtered_glucose_data:
+                if 'timestamp' in g and g['timestamp']:
+                    glucose_date_str = g['timestamp'].strftime('%Y-%m-%d')
+                    if glucose_date_str == target_date_str:
+                        local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            g_copy = g.copy()
+                            g_copy['hour'] = local_hour
+                            day_glucose.append(g_copy)
+                        else:
+                            day_glucose.append(g)
+                elif 'date_string' in g and g['date_string'] == target_date_str:
+                    # 如果有date_string字段，直接使用
+                    if 'hour' not in g and 'timestamp' in g and g['timestamp']:
+                        local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            g_copy = g.copy()
+                            g_copy['hour'] = local_hour
+                            day_glucose.append(g_copy)
+                        else:
+                            day_glucose.append(g)
+                    else:
+                        day_glucose.append(g)
+            
+            logger.info(f"从已过滤数据中筛选{meal_type}目标日期{target_date_str}的血糖数据: {len(day_glucose)}条")
+            
+            # 筛选目标日期的餐食数据
+            day_meals = []
+            for meal in meals_data:
+                if 'timestamp' in meal and meal['timestamp']:
+                    meal_date_str = meal['timestamp'].strftime('%Y-%m-%d')
+                    if meal_date_str == target_date_str:
+                        local_hour = self._convert_to_local_hour(meal['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            meal_copy = meal.copy()
+                            meal_copy['hour'] = local_hour
+                            day_meals.append(meal_copy)
+                        else:
+                            day_meals.append(meal)
+                elif 'date_string' in meal and meal['date_string'] == target_date_str:
+                    if 'hour' not in meal and 'timestamp' in meal and meal['timestamp']:
+                        local_hour = self._convert_to_local_hour(meal['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            meal_copy = meal.copy()
+                            meal_copy['hour'] = local_hour
+                            day_meals.append(meal_copy)
+                        else:
+                            day_meals.append(meal)
+                    elif 'hour' in meal:
+                        day_meals.append(meal)
+            
+            logger.info(f"筛选{meal_type}目标日期{target_date_str}的餐食数据: {len(day_meals)}条")
+            
+            if not day_glucose:
+                logger.warning(f"目标日期{target_date_str}没有血糖数据")
+                return None
+            
+            if not day_meals:
+                logger.warning(f"目标日期{target_date_str}没有餐食数据")
+                return None
+            
+            # 查找实际餐食时间
+            actual_meal_times = []
+            for meal in day_meals:
+                meal_hour = meal.get('hour', None)
+                if meal_hour is None and 'timestamp' in meal and meal['timestamp']:
+                    meal_hour = self._convert_to_local_hour(meal['timestamp'], timezone_offset)
+                
+                if meal_hour is not None:
+                    # 检查是否在餐食时间窗口内
+                    meal_start = time_window['meal_start']
+                    meal_end = time_window['meal_end']
+                    # 添加调试信息
+                    logger.info(f"检查{meal_type}餐食时间: {meal_hour}:00, 窗口范围: {meal_start}:00-{meal_end}:00")
+                    if meal_start <= meal_hour <= meal_end:
+                        actual_meal_times.append(meal_hour)
+                        logger.info(f"找到{meal_type}餐食时间: {meal_hour}:00")
+                    else:
+                        logger.info(f"餐食时间{meal_hour}:00不在窗口{meal_start}:00-{meal_end}:00内")
+            
+            if not actual_meal_times:
+                # 如果没有找到实际餐食时间，使用固定时间窗口
+                fallback_start = time_window['fallback_start']
+                fallback_end = time_window['fallback_end']
+                logger.warning(f"未找到{meal_type}实际餐食时间，使用回退时间窗口: {fallback_start}:00-{fallback_end}:00")
+                
+                # 在回退时间窗口内查找血糖值
+                window_glucose = [
+                    g for g in day_glucose 
+                    if 'hour' in g and fallback_start <= g['hour'] <= fallback_end
+                ]
+                
+                if window_glucose:
+                    # 选择最接近回退窗口中间时间的值
+                    target_hour = (fallback_start + fallback_end) / 2
+                    window_glucose_sorted = sorted(
+                        window_glucose, 
+                        key=lambda x: abs(x['hour'] - target_hour)
+                    )
+                    best_match = window_glucose_sorted[0]
+                    postprandial_value = self._sanitize_glucose_value(best_match['value'])
+                    logger.info(f"{meal_type}使用回退时间窗口，找到餐后血糖: {postprandial_value} (时间: {best_match['hour']}:00)")
+                    return postprandial_value
+                else:
+                    logger.warning(f"{meal_type}回退时间窗口内没有血糖数据")
+                    return None
+            
+            # 使用实际餐食时间计算餐后2小时血糖
+            # 取最早的实际餐食时间
+            meal_time = min(actual_meal_times)
+            postprandial_target_hour = meal_time + 2
+            
+            logger.info(f"{meal_type}使用实际餐食时间计算餐后2小时血糖: 餐食时间{meal_time}:00, 目标时间{postprandial_target_hour}:00")
+            
+            # 搜索餐后2小时血糖值，允许±30分钟的时间窗口
+            search_start = postprandial_target_hour - 0.5
+            search_end = postprandial_target_hour + 0.5
+            
+            postprandial_matches = [
+                g for g in day_glucose 
+                if 'hour' in g and search_start <= g['hour'] <= search_end
+            ]
+            
+            if postprandial_matches:
+                # 选择最接近目标时间的值
+                postprandial_matches_sorted = sorted(
+                    postprandial_matches, 
+                    key=lambda x: abs(x['hour'] - postprandial_target_hour)
+                )
+                best_match = postprandial_matches_sorted[0]
+                postprandial_value = self._sanitize_glucose_value(best_match['value'])
+                logger.info(f"{meal_type}找到餐后2小时血糖: {postprandial_value} (时间: {best_match['hour']}:00)")
+                return postprandial_value
+            else:
+                logger.warning(f"{meal_type}未找到餐后2小时血糖数据 (搜索范围: {search_start:.1f}-{search_end:.1f})")
+                return None
+            
+        except Exception as e:
+            logger.error(f"从已过滤数据计算餐后血糖失败: {e}")
+            return None
+
+    def _generate_full_day_analysis_guidance(self, analysis_time: datetime) -> str:
+        """生成全日数据分析指导
+        
+        Args:
+            analysis_time: 分析时间
+            
+        Returns:
+            str: 分析指导信息
+        """
+        try:
+            hour = analysis_time.hour
+            guidance = "**全日数据分析重点**：\n"
+            
+            if 6 <= hour < 10:
+                guidance += "- 重点关注凌晨空腹血糖和早餐后血糖反应\n"
+                guidance += "- 分析早餐对血糖的具体影响\n"
+                guidance += "- 评估上午血糖的稳定性趋势\n"
+            elif 10 <= hour < 15:
+                guidance += "- 重点关注早餐后血糖恢复和午餐前血糖准备\n"
+                guidance += "- 分析午餐对血糖的影响（如有午餐数据）\n"
+                guidance += "- 评估上午至中午的整体血糖趋势\n"
+            elif 15 <= hour < 21:
+                guidance += "- 重点关注午餐后血糖反应和下午血糖控制\n"
+                guidance += "- 分析晚餐对血糖的影响（如有晚餐数据）\n"
+                guidance += "- 评估全天血糖的整体趋势和波动模式\n"
+            else:
+                guidance += "- 重点关注晚餐后血糖反应和夜间血糖起始水平\n"
+                guidance += "- 分析全天血糖控制的总体情况\n"
+                guidance += "- 评估睡前血糖安全性\n"
+            
+            guidance += "- 基于全日数据提供综合性的分析和建议\n"
+            
+            return guidance
+            
+        except Exception as e:
+            logger.error(f"生成全日数据分析指导失败: {e}")
+            return "**分析重点：全日血糖控制情况**"
+
+    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None, use_smart_range: bool = True, use_full_day_range: bool = False, analysis_time: datetime = None, data_completeness: Dict[str, Any] = None, key_glucose_values: Dict[str, Any] = None) -> str:
+        """生成AI分析的prompt - 支持全日数据范围分析和智能数据范围分析
         
         Args:
             glucose_data: 血糖数据
@@ -2908,6 +3248,7 @@ class NightscoutWebMonitor:
             days: 分析天数
             time_window: 时间窗口ID (1, 2, 或 3)，保持向后兼容性
             use_smart_range: 是否使用智能数据范围，默认为True
+            use_full_day_range: 是否使用全日数据范围，默认为False
             analysis_time: 分析时间，默认为当前时间
             data_completeness: 数据完整性检查结果
             key_glucose_values: 关键血糖值（空腹和餐后血糖）
@@ -2945,8 +3286,25 @@ class NightscoutWebMonitor:
             if key_glucose_parts:
                 key_glucose_info = f"\n**关键血糖值分析**：\n" + "\n".join(f"• {part}" for part in key_glucose_parts) + "\n"
         
+        # 检查是否使用全日数据范围
+        if use_full_day_range:
+            # 获取全日数据范围信息
+            if analysis_time is None:
+                analysis_time = datetime.now()
+            
+            # 计算全日数据范围
+            start_time = analysis_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_time = analysis_time
+            duration_hours = (end_time - start_time).total_seconds() / 3600
+            
+            smart_range_info = f"**全日数据范围分析**：00:00-{end_time.strftime('%H:%M')}（当前时间：{analysis_time.strftime('%Y-%m-%d %H:%M:%S')}，数据时长：{duration_hours:.1f}小时）"
+            
+            # 生成全日数据分析指导
+            guidance = self._generate_full_day_analysis_guidance(analysis_time)
+            smart_range_info += f"\n{guidance}"
+            
         # 检查是否使用智能数据范围
-        if use_smart_range and data_completeness is not None:
+        elif use_smart_range and data_completeness is not None:
             # 获取智能数据范围信息
             if analysis_time is None:
                 analysis_time = datetime.now()
