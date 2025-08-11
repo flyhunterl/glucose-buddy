@@ -1676,6 +1676,299 @@ class NightscoutWebMonitor:
             logger.error(f"保存消息失败: {e}")
             return False
     
+    # 时间窗口常量定义
+    class TimeWindows:
+        """时间窗口常量定义"""
+        FASTING_START = 5
+        FASTING_END = 7
+        FASTING_TARGET = 6
+        
+        MEAL_WINDOWS = {
+            'breakfast': {'meal_start': 6, 'meal_end': 9, 'fallback_start': 8, 'fallback_end': 10},
+            'lunch': {'meal_start': 11, 'meal_end': 14, 'fallback_start': 12, 'fallback_end': 14},
+            'dinner': {'meal_start': 17, 'meal_end': 19, 'fallback_start': 18, 'fallback_end': 20}
+        }
+        
+        SEARCH_WINDOW_MINUTES = 30
+    
+    def _get_valid_timezone_offset(self) -> int:
+        """获取并验证时区偏移值
+        
+        Returns:
+            有效的时区偏移值，默认为8 (UTC+8)
+        """
+        try:
+            timezone_offset = self.config.get("basic", {}).get("timezone_offset", 8)
+            if isinstance(timezone_offset, (int, float)) and -12 <= timezone_offset <= 14:
+                return int(timezone_offset)
+            else:
+                logger.warning(f"无效的时区偏移配置: {timezone_offset}，使用默认值UTC+8")
+                return 8
+        except Exception as e:
+            logger.error(f"读取时区配置失败: {e}，使用默认值UTC+8")
+            return 8
+    
+    def _convert_to_local_hour(self, timestamp: datetime, timezone_offset: int) -> Optional[int]:
+        """将UTC时间戳转换为本地时间小时
+        
+        Args:
+            timestamp: UTC时间戳
+            timezone_offset: 时区偏移
+            
+        Returns:
+            本地时间小时数，如果转换失败返回None
+        """
+        try:
+            if not timestamp:
+                return None
+            local_hour = (timestamp.hour + timezone_offset) % 24
+            return local_hour
+        except Exception as e:
+            logger.error(f"时区转换失败: {e}")
+            return None
+    
+    def _validate_glucose_data(self, glucose_data: List[Dict]) -> bool:
+        """验证血糖数据的基本完整性
+        
+        Args:
+            glucose_data: 血糖数据列表
+            
+        Returns:
+            数据是否有效
+        """
+        if not glucose_data or not isinstance(glucose_data, list):
+            return False
+        return all(isinstance(item, dict) and 'value' in item for item in glucose_data)
+    
+    def _sanitize_glucose_value(self, value: Any) -> Optional[float]:
+        """清理和验证血糖值
+        
+        Args:
+            value: 原始血糖值
+            
+        Returns:
+            清理后的血糖值，如果无效返回None
+        """
+        try:
+            if value is None:
+                return None
+            float_value = float(value)
+            if 0 <= float_value <= 50:  # 合理的血糖值范围
+                return float_value
+            else:
+                logger.warning(f"血糖值超出合理范围: {float_value}")
+                return None
+        except (ValueError, TypeError):
+            logger.warning(f"无效的血糖值: {value}")
+            return None
+    
+    def _filter_glucose_by_date(self, glucose_data: List[Dict], target_date: datetime, timezone_offset: int) -> List[Dict]:
+        """按日期筛选血糖数据并转换时区
+        
+        Args:
+            glucose_data: 血糖数据列表
+            target_date: 目标日期
+            timezone_offset: 时区偏移
+            
+        Returns:
+            筛选后的血糖数据列表
+        """
+        target_date_str = target_date.strftime('%Y-%m-%d')
+        result = []
+        
+        for g in glucose_data:
+            if 'timestamp' in g and g['timestamp']:
+                # 使用timestamp的时间戳进行日期匹配
+                glucose_date_str = g['timestamp'].strftime('%Y-%m-%d')
+                if glucose_date_str == target_date_str:
+                    local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                    if local_hour is not None:
+                        g_copy = g.copy()
+                        g_copy['hour'] = local_hour
+                        result.append(g_copy)
+                    else:
+                        result.append(g)
+            elif 'date_string' in g and g['date_string'] == target_date_str:
+                # 如果有date_string字段，直接使用
+                if 'hour' not in g and 'timestamp' in g and g['timestamp']:
+                    local_hour = self._convert_to_local_hour(g['timestamp'], timezone_offset)
+                    if local_hour is not None:
+                        g_copy = g.copy()
+                        g_copy['hour'] = local_hour
+                        result.append(g_copy)
+                    else:
+                        result.append(g)
+                else:
+                    result.append(g)
+        
+        return result
+
+    def calculate_fasting_glucose(self, glucose_data: List[Dict], target_date: datetime) -> Optional[float]:
+        """计算空腹血糖值（早上6:00 AM，UTC+8）
+        
+        Args:
+            glucose_data: 血糖数据列表
+            target_date: 目标日期
+            
+        Returns:
+            空腹血糖值，如果没有找到则返回None
+        """
+        try:
+            # 验证输入数据
+            if not self._validate_glucose_data(glucose_data):
+                logger.warning("血糖数据验证失败")
+                return None
+            
+            # 获取有效的时区偏移
+            timezone_offset = self._get_valid_timezone_offset()
+            
+            # 筛选目标日期的血糖数据
+            day_glucose = self._filter_glucose_by_date(glucose_data, target_date, timezone_offset)
+            
+            # 计算空腹血糖：早上6:00 AM，搜索窗口5:00-7:00 AM
+            fasting_glucose = None
+            
+            # 优先精确匹配6:00 AM
+            exact_match = next((g['value'] for g in day_glucose if 'hour' in g and g['hour'] == self.TimeWindows.FASTING_TARGET), None)
+            if exact_match:
+                fasting_glucose = self._sanitize_glucose_value(exact_match)
+            else:
+                # 如果没有精确匹配，搜索5:00-7:00 AM窗口
+                window_matches = [
+                    g['value'] for g in day_glucose 
+                    if 'hour' in g and self.TimeWindows.FASTING_START <= g['hour'] <= self.TimeWindows.FASTING_END
+                ]
+                if window_matches:
+                    # 选择最接近6:00 AM的值
+                    window_matches_sanitized = [self._sanitize_glucose_value(v) for v in window_matches if self._sanitize_glucose_value(v) is not None]
+                    if window_matches_sanitized:
+                        fasting_glucose = window_matches_sanitized[0]  # 取第一个有效值
+            
+            logger.info(f"计算空腹血糖 - 日期: {target_date.strftime('%Y-%m-%d')}, 结果: {fasting_glucose}")
+            return fasting_glucose
+            
+        except Exception as e:
+            logger.error(f"计算空腹血糖失败: {e}")
+            return None
+    
+    def calculate_postprandial_glucose(self, glucose_data: List[Dict], meals_data: List[Dict], target_date: datetime, meal_type: str) -> Optional[float]:
+        """计算餐后2小时血糖值
+        
+        Args:
+            glucose_data: 血糖数据列表
+            meals_data: 餐食数据列表
+            target_date: 目标日期
+            meal_type: 餐食类型 ('breakfast', 'lunch', 'dinner')
+            
+        Returns:
+            餐后2小时血糖值，如果没有找到则返回None
+        """
+        try:
+            # 验证输入数据
+            if not self._validate_glucose_data(glucose_data):
+                logger.warning("血糖数据验证失败")
+                return None
+            
+            # 获取有效的时区偏移
+            timezone_offset = self._get_valid_timezone_offset()
+            
+            # 检查餐食类型是否支持
+            if meal_type not in self.TimeWindows.MEAL_WINDOWS:
+                logger.error(f"不支持的餐食类型: {meal_type}")
+                return None
+            
+            time_window = self.TimeWindows.MEAL_WINDOWS[meal_type]
+            
+            # 筛选目标日期的血糖数据
+            day_glucose = self._filter_glucose_by_date(glucose_data, target_date, timezone_offset)
+            
+            # 筛选目标日期的餐食数据
+            day_meals = []
+            target_date_str = target_date.strftime('%Y-%m-%d')
+            for meal in meals_data:
+                if 'timestamp' in meal and meal['timestamp']:
+                    meal_date_str = meal['timestamp'].strftime('%Y-%m-%d')
+                    if meal_date_str == target_date_str:
+                        local_hour = self._convert_to_local_hour(meal['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            meal_copy = meal.copy()
+                            meal_copy['hour'] = local_hour
+                            day_meals.append(meal_copy)
+                        else:
+                            day_meals.append(meal)
+                elif 'date_string' in meal and meal['date_string'] == target_date_str:
+                    if 'hour' not in meal and 'timestamp' in meal and meal['timestamp']:
+                        local_hour = self._convert_to_local_hour(meal['timestamp'], timezone_offset)
+                        if local_hour is not None:
+                            meal_copy = meal.copy()
+                            meal_copy['hour'] = local_hour
+                            day_meals.append(meal_copy)
+                        else:
+                            day_meals.append(meal)
+                    else:
+                        day_meals.append(meal)
+            
+            postprandial_glucose = None
+            
+            # 基于实际餐食时间计算餐后2小时血糖
+            if day_meals:
+                # 查找指定类型的餐食记录
+                meal_records = [m for m in day_meals if 'hour' in m and 
+                               time_window['meal_start'] <= m['hour'] < time_window['meal_end']]
+                
+                logger.debug(f"早餐数据计算 - 日期: {target_date.strftime('%Y-%m-%d')}, 餐食类型: {meal_type}")
+                logger.debug(f"时间窗口: {time_window}")
+                logger.debug(f"当日餐食记录数: {len(day_meals)}")
+                logger.debug(f"符合时间窗口的餐食记录数: {len(meal_records)}")
+                
+                if meal_records:
+                    # 取最早的餐食记录
+                    meal_record = min(meal_records, key=lambda x: x['hour'])
+                    logger.debug(f"选择的餐食记录: {meal_record}")
+                    
+                    if 'timestamp' in meal_record and meal_record['timestamp']:
+                        # 计算餐后2小时的目标时间
+                        target_time = meal_record['timestamp'] + timedelta(hours=2)
+                        
+                        # 获取目标时间前后30分钟内的所有血糖数据
+                        time_window_start = target_time - timedelta(minutes=self.TimeWindows.SEARCH_WINDOW_MINUTES)
+                        time_window_end = target_time + timedelta(minutes=self.TimeWindows.SEARCH_WINDOW_MINUTES)
+                        
+                        # 从中选择最接近目标时间的血糖值
+                        window_glucose = [
+                            g for g in day_glucose
+                            if g['timestamp'] and
+                               time_window_start <= g['timestamp'] <= time_window_end
+                        ]
+                        
+                        if window_glucose:
+                            # 找到最接近目标时间的血糖值
+                            closest_glucose = min(
+                                window_glucose,
+                                key=lambda x: abs(x['timestamp'] - target_time)
+                            )
+                            postprandial_glucose = self._sanitize_glucose_value(closest_glucose['value'])
+            
+            # 如果没有找到基于餐食时间的餐后血糖，使用固定时间窗口逻辑
+            if postprandial_glucose is None:
+                logger.debug(f"使用固定时间窗口逻辑，回退时间范围: {time_window['fallback_start']}:00-{time_window['fallback_end']}:00")
+                fallback_glucose = next(
+                    (g['value'] for g in day_glucose if 'hour' in g and 
+                     time_window['fallback_start'] <= g['hour'] < time_window['fallback_end']), 
+                    None
+                )
+                postprandial_glucose = self._sanitize_glucose_value(fallback_glucose)
+                logger.debug(f"回退逻辑找到的血糖值: {fallback_glucose}, 处理后: {postprandial_glucose}")
+            else:
+                logger.debug(f"基于餐食时间找到的餐后血糖: {postprandial_glucose}")
+            
+            logger.info(f"计算餐后2小时血糖 - 日期: {target_date.strftime('%Y-%m-%d')}, 餐食类型: {meal_type}, 结果: {postprandial_glucose}")
+            return postprandial_glucose
+            
+        except Exception as e:
+            logger.error(f"计算餐后2小时血糖失败: {e}")
+            return None
+
     def convert_to_beijing_time(self, dt_str: str) -> str:
         """将UTC时间字符串转换为配置的时区时间字符串"""
         try:
@@ -2017,6 +2310,78 @@ class NightscoutWebMonitor:
                 use_smart_range = False
                 data_completeness = None
             
+            # 计算关键血糖值：空腹血糖和餐后血糖
+            key_glucose_values = {}
+            
+            try:
+                # 获取最近几天的日期用于计算关键血糖值
+                analysis_dates = []
+                for i in range(days):
+                    date = current_time - timedelta(days=i)
+                    analysis_dates.append(date)
+                
+                # 计算空腹血糖（6:00 AM）
+                fasting_values = []
+                for date in analysis_dates:
+                    fasting_value = self.calculate_fasting_glucose(glucose_data, date)
+                    if fasting_value is not None:
+                        fasting_values.append(fasting_value)
+                
+                if fasting_values:
+                    key_glucose_values['fasting'] = {
+                        'values': fasting_values,
+                        'average': sum(fasting_values) / len(fasting_values),
+                        'latest': fasting_values[0] if fasting_values else None,
+                        'count': len(fasting_values)
+                    }
+                    logger.info(f"计算空腹血糖完成 - 数量: {len(fasting_values)}, 平均值: {key_glucose_values['fasting']['average']:.1f}")
+                
+                # 计算餐后2小时血糖
+                postprandial_values = {'breakfast': [], 'lunch': [], 'dinner': []}
+                
+                for meal_type in ['breakfast', 'lunch', 'dinner']:
+                    meal_values = []
+                    logger.debug(f"开始计算{meal_type}餐后血糖，分析日期数: {len(analysis_dates)}")
+                    for date in analysis_dates:
+                        postprandial_value = self.calculate_postprandial_glucose(
+                            glucose_data, treatment_data, date, meal_type
+                        )
+                        if postprandial_value is not None:
+                            meal_values.append(postprandial_value)
+                            logger.debug(f"{meal_type} - {date.strftime('%Y-%m-%d')}: 找到餐后血糖 {postprandial_value}")
+                        else:
+                            logger.debug(f"{meal_type} - {date.strftime('%Y-%m-%d')}: 未找到餐后血糖")
+                    
+                    if meal_values:
+                        postprandial_values[meal_type] = {
+                            'values': meal_values,
+                            'average': sum(meal_values) / len(meal_values),
+                            'latest': meal_values[0] if meal_values else None,
+                            'count': len(meal_values)
+                        }
+                        logger.info(f"计算餐后2小时血糖({meal_type})完成 - 数量: {len(meal_values)}, 平均值: {postprandial_values[meal_type]['average']:.1f}")
+                
+                # 如果有餐后血糖数据，添加到关键血糖值
+                if any(postprandial_values[meal_type] for meal_type in ['breakfast', 'lunch', 'dinner']):
+                    key_glucose_values['postprandial'] = postprandial_values
+                
+                logger.info(f"关键血糖值计算完成 - 空腹: {'有' if key_glucose_values.get('fasting') else '无'}, 餐后: {'有' if key_glucose_values.get('postprandial') else '无'}")
+                
+                # 详细记录餐后血糖数据
+                if key_glucose_values.get('postprandial'):
+                    postprandial_data = key_glucose_values['postprandial']
+                    for meal_type, meal_info in postprandial_data.items():
+                        if meal_info and isinstance(meal_info, dict) and meal_info.get('values'):
+                            logger.info(f"{meal_type}餐后血糖数据: 平均{meal_info['average']:.1f}, 最新{meal_info['latest']:.1f}, 测量次数{meal_info['count']}")
+                        else:
+                            logger.info(f"{meal_type}餐后血糖数据: 无数据")
+                else:
+                    logger.info("餐后血糖数据: 无任何餐后数据")
+                
+            except Exception as e:
+                logger.error(f"计算关键血糖值失败: {e}")
+                key_glucose_values = {}
+            
             # 生成分析提示词
             prompt = self.get_analysis_prompt(
                 filtered_glucose_data, 
@@ -2027,7 +2392,8 @@ class NightscoutWebMonitor:
                 time_window,
                 use_smart_range,
                 current_time,
-                data_completeness
+                data_completeness,
+                key_glucose_values
             )
             
             # 在提示中添加数据质量信息（如果有问题）
@@ -2531,7 +2897,7 @@ class NightscoutWebMonitor:
             logger.error(f"生成智能分析指导失败: {e}")
             return "**分析重点：当前时间段血糖控制情况**"
 
-    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None, use_smart_range: bool = True, analysis_time: datetime = None, data_completeness: Dict[str, Any] = None) -> str:
+    def get_analysis_prompt(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, time_window: int = None, use_smart_range: bool = True, analysis_time: datetime = None, data_completeness: Dict[str, Any] = None, key_glucose_values: Dict[str, Any] = None) -> str:
         """生成AI分析的prompt - 支持智能数据范围分析
         
         Args:
@@ -2544,6 +2910,7 @@ class NightscoutWebMonitor:
             use_smart_range: 是否使用智能数据范围，默认为True
             analysis_time: 分析时间，默认为当前时间
             data_completeness: 数据完整性检查结果
+            key_glucose_values: 关键血糖值（空腹和餐后血糖）
         """
         
         # 获取用户配置的时区偏移
@@ -2553,6 +2920,30 @@ class NightscoutWebMonitor:
         # 生成智能数据范围分析提示
         smart_range_info = ""
         completeness_info = ""
+        
+        # 生成关键血糖值信息
+        key_glucose_info = ""
+        if key_glucose_values:
+            key_glucose_parts = []
+            
+            # 空腹血糖信息
+            if key_glucose_values.get('fasting'):
+                fasting_data = key_glucose_values['fasting']
+                fasting_info = f"空腹血糖(6:00 AM): 平均{fasting_data['average']:.1f} mmol/L, 最新{fasting_data['latest']:.1f} mmol/L, 测量次数{fasting_data['count']}次"
+                key_glucose_parts.append(fasting_info)
+            
+            # 餐后血糖信息
+            if key_glucose_values.get('postprandial'):
+                postprandial_data = key_glucose_values['postprandial']
+                for meal_type, meal_info in postprandial_data.items():
+                    if meal_info and isinstance(meal_info, dict) and meal_info.get('values'):
+                        meal_names = {'breakfast': '早餐后', 'lunch': '午餐后', 'dinner': '晚餐后'}
+                        meal_name = meal_names.get(meal_type, meal_type)
+                        postprandial_info = f"{meal_name}2小时血糖: 平均{meal_info['average']:.1f} mmol/L, 最新{meal_info['latest']:.1f} mmol/L, 测量次数{meal_info['count']}次"
+                        key_glucose_parts.append(postprandial_info)
+            
+            if key_glucose_parts:
+                key_glucose_info = f"\n**关键血糖值分析**：\n" + "\n".join(f"• {part}" for part in key_glucose_parts) + "\n"
         
         # 检查是否使用智能数据范围
         if use_smart_range and data_completeness is not None:
@@ -2786,7 +3177,7 @@ class NightscoutWebMonitor:
 - 对于缺失数据时段，应明确标注分析结论的局限性
 - 避免将AI推理数据呈现为实际测量结果
 
-请用专业但易懂的语言回答，控制在400字以内。"""
+请用专业但易懂的语言回答。"""
         elif time_window is not None:
             # 使用传统时间窗口分析（向后兼容）
             current_time = datetime.now()
@@ -2813,6 +3204,7 @@ class NightscoutWebMonitor:
 - 如有午餐数据，简要分析午餐前血糖准备情况
 
 {availability_message}
+{key_glucose_info}
 
 请提供以下针对性分析：
 1. 凌晨空腹血糖控制评估
@@ -2826,7 +3218,7 @@ class NightscoutWebMonitor:
 - 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
 - 避免将AI推理数据呈现为实际测量结果
 
-请用专业但易懂的语言回答，控制在400字以内。"""
+请用专业但易懂的语言回答。"""
             elif time_window == 2:
                 prompt = f"""
 你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据（时间段1+2: {time_range}），重点关注午餐后的血糖和午餐对血糖的影响，第一时间段数据作为辅助信息。
@@ -2840,6 +3232,7 @@ class NightscoutWebMonitor:
 - 评估运动对下午血糖的影响
 
 {availability_message}
+{key_glucose_info}
 
 **数据使用说明：**
 - 00:00-14:59数据作为辅助参考信息
@@ -2859,7 +3252,7 @@ class NightscoutWebMonitor:
 - 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
 - 避免将AI推理数据呈现为实际测量结果
 
-请用专业但易懂的语言回答，控制在400字以内。"""
+请用专业但易懂的语言回答。"""
             else:  # time_window == 3
                 prompt = f"""
 你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据（全天: {time_range}），重点关注晚餐后的血糖和晚餐对血糖的影响，并提供全天血糖总结分析。
@@ -2873,6 +3266,7 @@ class NightscoutWebMonitor:
 - 基于全天数据提供整体改善建议
 
 {availability_message}
+{key_glucose_info}
 
 请提供以下针对性分析：
 1. 晚餐后血糖控制评估
@@ -2887,7 +3281,7 @@ class NightscoutWebMonitor:
 - 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
 - 避免将AI推理数据呈现为实际测量结果
 
-请用专业但易懂的语言回答，控制在400字以内。"""
+请用专业但易懂的语言回答。"""
         else:
             # 使用原有的通用提示词
             prompt = f"""你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，并提供专业的医学建议。{prompt_info} {treatment_prompt}
@@ -3013,7 +3407,7 @@ class NightscoutWebMonitor:
 • 总测量次数：{len(values)}次
 • 指尖血糖记录：{len(meter_mmol)}次
 • 运动记录：{len(activities)}次
-
+{key_glucose_info}
 {time_window_guidance}
 
 请提供以下分析：
@@ -3030,7 +3424,7 @@ class NightscoutWebMonitor:
 - 如果使用任何非实际测量的数值进行推测，必须明确标注数据来源
 - 避免将AI推理数据呈现为实际测量结果
 
-请用专业但易懂的语言回答，控制在400字以内。"""
+请用专业但易懂的语言回答。"""
         
         # 为所有提示词添加数据展示部分
         prompt += f"""
