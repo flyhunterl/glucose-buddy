@@ -91,6 +91,123 @@
     let currentMessageId = null;
     let selectedMessageIds = new Set();
 
+    // 增强的Markdown表格解析函数
+    function parseMarkdownTables(text) {
+        const tableRegex = /(\|.*\|)\n(\|[\s\-\|:]+\|)\n((\|.*\|\n?)+)/g;
+        
+        return text.replace(tableRegex, function(match, headerRow, separatorRow, bodyRows) {
+            // 处理表头
+            const headers = headerRow.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim());
+            
+            // 处理表体
+            const rows = bodyRows.trim().split('\n').map(row => 
+                row.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim())
+            );
+            
+            // 分析对齐方式
+            const alignmentRow = separatorRow.split('|').filter(cell => cell.trim() !== '');
+            const alignments = alignmentRow.map(cell => {
+                const trimmed = cell.trim();
+                if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'center';
+                if (trimmed.endsWith(':')) return 'right';
+                return 'left';
+            });
+            
+            // 构建增强的HTML表格
+            let html = '<table class="table table-striped table-bordered table-hover table-responsive markdown-table">';
+            
+            // 表头
+            html += '<thead class="markdown-thead"><tr class="markdown-tr">';
+            headers.forEach((header, index) => {
+                const align = alignments[index] || 'left';
+                const alignClass = align === 'center' ? 'text-center' : align === 'right' ? 'text-end' : 'text-start';
+                html += `<th class="${alignClass} markdown-th">${header}</th>`;
+            });
+            html += '</tr></thead>';
+            
+            // 表体
+            html += '<tbody class="markdown-tbody">';
+            rows.forEach(row => {
+                html += '<tr class="markdown-tr">';
+                row.forEach((cell, index) => {
+                    const align = alignments[index] || 'left';
+                    const alignClass = align === 'center' ? 'text-center' : align === 'right' ? 'text-end' : 'text-start';
+                    html += `<td class="${alignClass} markdown-td">${cell}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody>';
+            
+            html += '</table>';
+            return html;
+        });
+    }
+    
+    // 增强的Markdown解析函数
+    function parseMarkdown(text) {
+        // 转义HTML
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        // 表格处理（需要在其他处理之前）
+        text = parseMarkdownTables(text);
+        
+        // 标题
+        text = text.replace(/^###### (.*$)/gm, '<h6 class="markdown-h6">$1</h6>');
+        text = text.replace(/^##### (.*$)/gm, '<h5 class="markdown-h5">$1</h5>');
+        text = text.replace(/^#### (.*$)/gm, '<h4 class="markdown-h4">$1</h4>');
+        text = text.replace(/^### (.*$)/gm, '<h3 class="markdown-h3">$1</h3>');
+        text = text.replace(/^## (.*$)/gm, '<h2 class="markdown-h2">$1</h2>');
+        text = text.replace(/^# (.*$)/gm, '<h1 class="markdown-h1">$1</h1>');
+        
+        // 无序列表
+        text = text.replace(/^\* (.*$)/gm, '<li class="markdown-li">$1</li>');
+        text = text.replace(/^- (.*$)/gm, '<li class="markdown-li">$1</li>');
+        text = text.replace(/^\+ (.*$)/gm, '<li class="markdown-li">$1</li>');
+        
+        // 有序列表
+        text = text.replace(/^\d+\. (.*$)/gm, '<li class="markdown-li">$1</li>');
+        
+        // 包装列表项 - 改进的正则表达式处理连续列表项
+        text = text.replace(/(<li class="markdown-li">.*<\/li>)(\s*<li class="markdown-li">.*<\/li>)*/gs, function(match) {
+            return '<ul class="markdown-ul">' + match + '</ul>';
+        });
+        
+        // 代码块 - 增强语法高亮支持
+        text = text.replace(/```([\s\S]*?)```/g, '<pre class="markdown-pre"><code class="markdown-code">$1</code></pre>');
+        
+        // 行内代码
+        text = text.replace(/`([^`]+)`/g, '<code class="markdown-inline-code">$1</code>');
+        
+        // 链接
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="markdown-link">$1</a>');
+        
+        // 图片
+        text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="markdown-image">');
+        
+        // 粗体
+        text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="markdown-strong">$1</strong>');
+        text = text.replace(/__(.*?)__/g, '<strong class="markdown-strong">$1</strong>');
+        
+        // 斜体
+        text = text.replace(/\*(.*?)\*/g, '<em class="markdown-em">$1</em>');
+        text = text.replace(/_(.*?)_/g, '<em class="markdown-em">$1</em>');
+        
+        // 删除线
+        text = text.replace(/~~(.*?)~~/g, '<del class="markdown-del">$1</del>');
+        
+        // 引用块
+        text = text.replace(/^> (.*$)/gm, '<blockquote class="markdown-blockquote">$1</blockquote>');
+        
+        // 换行处理 - 改进的换行逻辑
+        text = text.replace(/\n\n/g, '</p><p class="markdown-paragraph">');
+        text = text.replace(/\n/g, '<br class="markdown-br">');
+        
+        // 包装段落
+        text = '<p class="markdown-paragraph">' + text + '</p>';
+        
+        return text;
+    }
+
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
         loadMessages();
@@ -477,99 +594,8 @@
             });
     }
 
-    // 简单的Markdown解析函数
-    function parseMarkdown(text) {
-        // 转义HTML
-        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         
-        // 表格处理（需要在其他处理之前）
-        text = parseMarkdownTables(text);
-        
-        // 标题
-        text = text.replace(/^###### (.*$)/gm, '<h6>$1</h6>');
-        text = text.replace(/^##### (.*$)/gm, '<h5>$1</h5>');
-        text = text.replace(/^#### (.*$)/gm, '<h4>$1</h4>');
-        text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-        text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-        text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-        
-        // 无序列表
-        text = text.replace(/^\* (.*$)/gm, '<li>$1</li>');
-        text = text.replace(/^- (.*$)/gm, '<li>$1</li>');
-        text = text.replace(/^\+ (.*$)/gm, '<li>$1</li>');
-        
-        // 有序列表
-        text = text.replace(/^\d+\. (.*$)/gm, '<li>$1</li>');
-        
-        // 包装列表项
-        text = text.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-        
-        // 代码块
-        text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-        
-        // 行内代码
-        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-        
-        // 链接
-        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-        
-        // 图片
-        text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width: 100%; height: auto;">');
-        
-        // 粗体
-        text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        text = text.replace(/__(.*?)__/g, '<strong>$1</strong>');
-        
-        // 斜体
-        text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
-        text = text.replace(/_(.*?)_/g, '<em>$1</em>');
-        
-        // 换行
-        text = text.replace(/\n/g, '<br>');
-        
-        return text;
-    }
     
-    // Markdown表格解析函数
-    function parseMarkdownTables(text) {
-        // 匹配表格格式
-        const tableRegex = /(\|.*\|)\n(\|[\s\-\|]+\|)\n((\|.*\|\n?)+)/g;
-        
-        return text.replace(tableRegex, function(match, headerRow, separatorRow, bodyRows) {
-            // 处理表头
-            const headers = headerRow.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim());
-            
-            // 处理表体
-            const rows = bodyRows.trim().split('\n').map(row => 
-                row.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim())
-            );
-            
-            // 构建HTML表格
-            let html = '<table class="table table-striped table-bordered">';
-            
-            // 表头
-            html += '<thead><tr>';
-            headers.forEach(header => {
-                html += `<th>${parseMarkdown(header)}</th>`;
-            });
-            html += '</tr></thead>';
-            
-            // 表体
-            html += '<tbody>';
-            rows.forEach(row => {
-                html += '<tr>';
-                row.forEach(cell => {
-                    html += `<td>${parseMarkdown(cell)}</td>`;
-                });
-                html += '</tr>';
-            });
-            html += '</tbody>';
-            
-            html += '</table>';
-            return html;
-        });
-    }
-
     // 格式化日期时间
     function formatDateTime(dateTimeStr) {
         const date = new Date(dateTimeStr);
@@ -612,7 +638,8 @@
     
     .message-content {
         font-family: inherit;
-        line-height: 1.6;
+        line-height: 1.5;
+        color: #333;
     }
     
     .message-card:hover {
@@ -620,93 +647,144 @@
         transition: box-shadow 0.3s ease;
     }
     
-    /* Markdown样式 */
+    /* 统一的标题样式 */
     .message-content h1, .message-content h2, .message-content h3, 
     .message-content h4, .message-content h5, .message-content h6 {
-        margin-top: 1rem;
+        margin-top: 0.75rem;
         margin-bottom: 0.5rem;
         font-weight: 600;
+        color: #2c3e50;
     }
-    
-    .message-content h1 { font-size: 1.5rem; }
-    .message-content h2 { font-size: 1.3rem; }
-    .message-content h3 { font-size: 1.2rem; }
-    .message-content h4 { font-size: 1.1rem; }
-    .message-content h5 { font-size: 1rem; }
-    .message-content h6 { font-size: 0.9rem; }
-    
+
+    .message-content h1 { font-size: 1.5rem; margin-top: 1rem; }
+    .message-content h2 { font-size: 1.3rem; margin-top: 0.8rem; }
+    .message-content h3 { font-size: 1.2rem; margin-top: 0.7rem; }
+    .message-content h4 { font-size: 1.1rem; margin-top: 0.6rem; }
+    .message-content h5 { font-size: 1rem; margin-top: 0.5rem; }
+    .message-content h6 { font-size: 0.9rem; margin-top: 0.4rem; }
+
+    /* 统一的列表样式 */
     .message-content ul, .message-content ol {
-        margin: 0.5rem 0;
-        padding-left: 1.5rem;
+        margin: 0.4rem 0;
+        padding-left: 1.25rem;
     }
-    
+
     .message-content li {
-        margin: 0.25rem 0;
+        margin: 0.15rem 0;
+        line-height: 1.4;
     }
-    
+
+    /* 统一的代码块样式 */
     .message-content pre {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
-        border-radius: 4px;
-        padding: 1rem;
+        border-radius: 6px;
+        padding: 0.875rem;
         overflow-x: auto;
-        margin: 1rem 0;
+        margin: 0.75rem 0;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     }
-    
+
     .message-content code {
-        background-color: #f8f9fa;
-        border: 1px solid #e9ecef;
-        border-radius: 3px;
-        padding: 0.2rem 0.4rem;
-        font-family: 'Courier New', monospace;
-        font-size: 0.9rem;
+        background-color: #f1f3f5;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 0.15rem 0.35rem;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.88rem;
+        color: #d63384;
     }
-    
+
     .message-content pre code {
         background-color: transparent;
         border: none;
         padding: 0;
+        color: #495057;
     }
-    
+
+    /* 统一的引用样式 */
     .message-content blockquote {
-        border-left: 4px solid #6c757d;
+        border-left: 4px solid #0d6efd;
         padding-left: 1rem;
-        margin: 1rem 0;
+        margin: 0.75rem 0;
         color: #6c757d;
         font-style: italic;
+        background-color: #f8f9fa;
+        border-radius: 0 4px 4px 0;
     }
-    
+
+    /* 统一的表格样式 */
     .message-content table {
         width: 100%;
-        margin: 1rem 0;
-        border-collapse: collapse;
+        margin: 0.75rem 0;
+        border-collapse: separate;
+        border-spacing: 0;
+        border-radius: 6px;
+        overflow: hidden;
     }
-    
+
     .message-content th, .message-content td {
         border: 1px solid #dee2e6;
-        padding: 0.75rem;
+        padding: 0.625rem;
         text-align: left;
+        vertical-align: middle;
     }
-    
+
     .message-content th {
-        background-color: #f8f9fa;
+        background-color: #0d6efd;
+        color: white;
         font-weight: 600;
+        border-bottom: 2px solid #0a58ca;
     }
-    
+
+    .message-content table tr:nth-child(even) {
+        background-color: #f8f9fa;
+    }
+
+    .message-content table tr:hover {
+        background-color: #e9ecef;
+    }
+
+    /* 统一的链接样式 */
     .message-content a {
         color: #0d6efd;
         text-decoration: none;
+        font-weight: 500;
     }
-    
+
     .message-content a:hover {
+        color: #0a58ca;
         text-decoration: underline;
     }
-    
+
+    /* 统一的图片样式 */
     .message-content img {
         max-width: 100%;
         height: auto;
-        border-radius: 4px;
+        border-radius: 6px;
         margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* 段落样式优化 */
+    .message-content p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+    }
+
+    .message-content p:first-child {
+        margin-top: 0;
+    }
+
+    .message-content p:last-child {
+        margin-bottom: 0;
+    }
+
+    /* 换行样式优化 */
+    .message-content br {
+        content: '';
+        display: block;
+        margin-bottom: 0.25rem;
     }
 </style>
 {% endblock %}

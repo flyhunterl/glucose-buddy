@@ -6312,21 +6312,52 @@ def api_current_glucose():
 @app.route('/api/analysis')
 def api_analysis():
     """获取AI分析API"""
-    # 获取今天的数据，确保只分析当天
-    today = datetime.now().strftime('%Y-%m-%d')
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-
-    glucose_data = monitor.get_glucose_data_from_db(start_date=today, end_date=today)
-    treatment_data = monitor.get_treatment_data_from_db(start_date=today, end_date=today)
-    activity_data = monitor.get_activity_data_from_db(start_date=today, end_date=today)
-    meter_data = monitor.get_meter_data_from_db(start_date=today, end_date=today)
-
-    if not glucose_data:
-        return jsonify({'error': '暂无血糖数据'}), 404
-
     try:
+        # 获取当前时间，格式化为 YYYY-MM-DD HH:MM:SS
+        current_time = datetime.now()
+        today = current_time.strftime('%Y-%m-%d')
+        current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+        
+        logger.info(f"开始执行手动分析，时间范围：{today} 00:00:00 到 {current_time_str}")
+        
+        # 使用与自动分析相同的数据获取方式
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # 获取从当日00:00到当前时间的数据
+        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
+            monitor.fetch_nightscout_data(today, today)
+        )
+        
+        # 过滤数据，只保留到当前时间的数据（与自动分析逻辑一致）
+        if glucose_data:
+            glucose_data = [item for item in glucose_data if item.get('dateString') and 
+                          datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if treatment_data:
+            treatment_data = [item for item in treatment_data if item.get('created_at') and 
+                            datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if activity_data:
+            activity_data = [item for item in activity_data if item.get('created_at') and 
+                           datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        if meter_data:
+            meter_data = [item for item in meter_data if item.get('timestamp') and 
+                        datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+        
+        logger.info(f"手动分析过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
+                   f"治疗: {len(treatment_data) if treatment_data else 0}, "
+                   f"活动: {len(activity_data) if activity_data else 0}, "
+                   f"血糖仪: {len(meter_data) if meter_data else 0}")
+        
+        loop.close()
+
+        if not glucose_data:
+            return jsonify({'error': '暂无血糖数据'}), 404
+
         try:
-            # 使用基于时间的分析（启用时间窗口分析），分析当天数据
+            # 使用与自动分析相同的分析逻辑
             analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
             # 保存分析结果到消息表
             monitor.save_message("analysis", "血糖分析报告", analysis)
