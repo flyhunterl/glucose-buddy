@@ -93,53 +93,66 @@
 
     // 增强的Markdown表格解析函数
     function parseMarkdownTables(text) {
-        const tableRegex = /(\|.*\|)\n(\|[\s\-\|:]+\|)\n((\|.*\|\n?)+)/g;
+        // 修复的正则表达式，支持多种表格格式
+        const tableRegex = /(\|.*\|)\s*\n(\|[\s\-\|:]+\|)\s*\n((\|.*\|\s*\n?)+)/g;
         
         return text.replace(tableRegex, function(match, headerRow, separatorRow, bodyRows) {
-            // 处理表头
-            const headers = headerRow.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim());
-            
-            // 处理表体
-            const rows = bodyRows.trim().split('\n').map(row => 
-                row.split('|').filter(cell => cell.trim() !== '').map(cell => cell.trim())
-            );
-            
-            // 分析对齐方式
-            const alignmentRow = separatorRow.split('|').filter(cell => cell.trim() !== '');
-            const alignments = alignmentRow.map(cell => {
-                const trimmed = cell.trim();
-                if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'center';
-                if (trimmed.endsWith(':')) return 'right';
-                return 'left';
-            });
-            
-            // 构建增强的HTML表格
-            let html = '<table class="table table-striped table-bordered table-hover table-responsive markdown-table">';
-            
-            // 表头
-            html += '<thead class="markdown-thead"><tr class="markdown-tr">';
-            headers.forEach((header, index) => {
-                const align = alignments[index] || 'left';
-                const alignClass = align === 'center' ? 'text-center' : align === 'right' ? 'text-end' : 'text-start';
-                html += `<th class="${alignClass} markdown-th">${header}</th>`;
-            });
-            html += '</tr></thead>';
-            
-            // 表体
-            html += '<tbody class="markdown-tbody">';
-            rows.forEach(row => {
-                html += '<tr class="markdown-tr">';
-                row.forEach((cell, index) => {
+            try {
+                // 处理表头 - 清理空单元格和多余空格
+                const headers = headerRow.split('|')
+                    .filter(cell => cell.trim() !== '')
+                    .map(cell => cell.trim());
+                
+                // 处理表体 - 清理空单元格和多余空格
+                const rows = bodyRows.trim()
+                    .split('\n')
+                    .map(row => 
+                        row.split('|')
+                            .filter(cell => cell.trim() !== '')
+                            .map(cell => cell.trim())
+                    )
+                    .filter(row => row.length > 0); // 过滤空行
+                
+                // 分析对齐方式
+                const alignmentRow = separatorRow.split('|').filter(cell => cell.trim() !== '');
+                const alignments = alignmentRow.map(cell => {
+                    const trimmed = cell.trim();
+                    if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'center';
+                    if (trimmed.endsWith(':')) return 'right';
+                    return 'left';
+                });
+                
+                // 构建增强的HTML表格
+                let html = '<table class="table table-striped table-bordered table-hover table-responsive markdown-table">';
+                
+                // 表头
+                html += '<thead class="markdown-thead"><tr class="markdown-tr">';
+                headers.forEach((header, index) => {
                     const align = alignments[index] || 'left';
                     const alignClass = align === 'center' ? 'text-center' : align === 'right' ? 'text-end' : 'text-start';
-                    html += `<td class="${alignClass} markdown-td">${cell}</td>`;
+                    html += `<th class="${alignClass} markdown-th">${header}</th>`;
                 });
-                html += '</tr>';
-            });
-            html += '</tbody>';
-            
-            html += '</table>';
-            return html;
+                html += '</tr></thead>';
+                
+                // 表体
+                html += '<tbody class="markdown-tbody">';
+                rows.forEach(row => {
+                    html += '<tr class="markdown-tr">';
+                    row.forEach((cell, index) => {
+                        const align = alignments[index] || 'left';
+                        const alignClass = align === 'center' ? 'text-center' : align === 'right' ? 'text-end' : 'text-start';
+                        html += `<td class="${alignClass} markdown-td">${cell}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody>';
+                
+                html += '</table>';
+                return html;
+            } catch (error) {
+                console.error('Markdown表格解析错误:', error);
+                return match; // 解析失败时返回原始文本
+            }
         });
     }
     
