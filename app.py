@@ -1307,7 +1307,7 @@ class NightscoutWebMonitor:
                 # 识别运动数据
                 if event_type == 'Exercise' or '运动' in notes or '锻炼' in notes or '跑步' in notes or '乒乓球' in notes or '篮球' in notes or '游泳' in notes:
                     filtered_activity_data.append({
-                        'created_at': item.get('created_at', ''),
+                        'shanghai_time': item.get('created_at', ''),  # 使用created_at作为shanghai_time
                         'eventType': event_type or '运动',
                         'duration': item.get('duration', 0),
                         'notes': item.get('notes', '')
@@ -1319,7 +1319,7 @@ class NightscoutWebMonitor:
                     # 确保数值是合理的mmol/L范围
                     if glucose_value and float(glucose_value) > 0:
                         filtered_meter_data.append({
-                            'dateString': item.get('created_at', ''),
+                            'shanghai_time': item.get('created_at', ''),  # 使用created_at作为shanghai_time
                             'sgv': float(glucose_value)
                         })
 
@@ -1361,25 +1361,28 @@ class NightscoutWebMonitor:
         
         logger.info(f"开始执行分析，时间范围：{today} 00:00:00 到 {current_time_str}")
         
-        # 获取从当日00:00到当前时间的数据
+        # 获取当天的数据
         glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(today, today)
         
-        # 过滤数据，只保留到当前时间的数据
+        # 过滤数据，只保留当天的数据（不过滤到当前时间，确保所有当天数据都包含）
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+        
         if glucose_data:
             glucose_data = [item for item in glucose_data if item.get('dateString') and 
-                          datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+                          today_start <= datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if treatment_data:
             treatment_data = [item for item in treatment_data if item.get('created_at') and 
-                            datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+                            today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if activity_data:
-            activity_data = [item for item in activity_data if item.get('created_at') and 
-                           datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+            activity_data = [item for item in activity_data if item.get('shanghai_time') and 
+                           today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         if meter_data:
-            meter_data = [item for item in meter_data if item.get('timestamp') and 
-                        datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+            meter_data = [item for item in meter_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         logger.info(f"过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
@@ -2510,7 +2513,35 @@ class NightscoutWebMonitor:
                 logger.error(f"计算关键血糖值失败: {e}")
                 key_glucose_values = {}
             
-            # 生成分析提示词
+            # 生成分析提示词 - 添加调试日志确认数据传递
+            logger.info(f"=== AI分析数据传递调试 ===")
+            logger.info(f"filtered_glucose_data: {len(filtered_glucose_data) if filtered_glucose_data else 0} 条")
+            logger.info(f"treatment_data: {len(treatment_data) if treatment_data else 0} 条")
+            logger.info(f"filtered_activity_data: {len(filtered_activity_data) if filtered_activity_data else 0} 条")
+            logger.info(f"filtered_meter_data: {len(filtered_meter_data) if filtered_meter_data else 0} 条")
+            
+            # 详细记录运动和指尖血糖数据
+            if filtered_activity_data:
+                logger.info("运动数据详情:")
+                for i, activity in enumerate(filtered_activity_data[:3]):  # 只显示前3条
+                    logger.info(f"  [{i+1}] 时间: {activity.get('shanghai_time', 'N/A')}, 类型: {activity.get('eventType', 'N/A')}, 时长: {activity.get('duration', 0)}分钟")
+            
+            if filtered_meter_data:
+                logger.info("指尖血糖数据详情:")
+                for i, meter in enumerate(filtered_meter_data[:3]):  # 只显示前3条
+                    logger.info(f"  [{i+1}] 时间: {meter.get('shanghai_time', 'N/A')}, 血糖值: {meter.get('sgv', 'N/A')}")
+            
+            if treatment_data:
+                logger.info("餐食数据详情:")
+                meal_count = 0
+                for treatment in treatment_data:
+                    if treatment.get('eventType') in ['Meal Bolus', 'Snack Bolus']:
+                        meal_count += 1
+                        # 尝试多个可能的字段名来获取时间戳
+                        time_val = treatment.get('shanghai_time') or treatment.get('created_at') or treatment.get('dateString') or treatment.get('timestamp', 'N/A')
+                        logger.info(f"  [{meal_count}] 时间: {time_val}, 类型: {treatment.get('eventType', 'N/A')}, 碳水: {treatment.get('carbs', 0)}g")
+                logger.info(f"总共检测到 {meal_count} 条餐食记录")
+            
             prompt = self.get_analysis_prompt(
                 filtered_glucose_data, 
                 treatment_data, 
@@ -6472,27 +6503,30 @@ def api_analysis():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # 获取从当日00:00到当前时间的数据
+        # 获取当天的数据
         glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
             monitor.fetch_nightscout_data(today, today)
         )
         
-        # 过滤数据，只保留到当前时间的数据（与自动分析逻辑一致）
+        # 过滤数据，只保留当天的数据（与自动分析逻辑一致）
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+        
         if glucose_data:
             glucose_data = [item for item in glucose_data if item.get('dateString') and 
-                          datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+                          today_start <= datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if treatment_data:
             treatment_data = [item for item in treatment_data if item.get('created_at') and 
-                            datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+                            today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if activity_data:
-            activity_data = [item for item in activity_data if item.get('created_at') and 
-                           datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+            activity_data = [item for item in activity_data if item.get('shanghai_time') and 
+                           today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         if meter_data:
-            meter_data = [item for item in meter_data if item.get('timestamp') and 
-                        datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= current_time]
+            meter_data = [item for item in meter_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         logger.info(f"手动分析过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
