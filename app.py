@@ -3088,20 +3088,6 @@ class NightscoutWebMonitor:
         current_time_info += f"\n**时区信息**：{data_range['timezone_info']}"
         current_time_info += f"\n**数据截止时间**：当日00:00至当前时间，数据分析基于此时间范围内的全部数据。"
         
-        # 添加餐食时间判断逻辑
-        current_hour = data_range['end_time'].hour
-        meal_time_analysis = ""
-        if current_hour < 10:
-            meal_time_analysis = "\n**餐食分析时段**：当前时间为早晨，主要分析早餐时段数据，午餐和晚餐数据尚未产生。"
-        elif current_hour < 15:
-            meal_time_analysis = "\n**餐食分析时段**：当前时间为中午，可分析早餐和午餐时段数据，晚餐数据尚未产生。"
-        elif current_hour < 20:
-            meal_time_analysis = "\n**餐食分析时段**：当前时间为下午，可分析早餐、午餐和晚餐时段数据。"
-        else:
-            meal_time_analysis = "\n**餐食分析时段**：当前时间为晚上，可分析全天的早餐、午餐和晚餐数据。"
-        
-        current_time_info += meal_time_analysis
-        
         # 添加数据完整性信息
         if data_completeness:
             completeness_score = data_completeness.get('completeness_score', 100)
@@ -3148,11 +3134,20 @@ class NightscoutWebMonitor:
         carbs_total = 0
         protein_total = 0
         fat_total = 0
+        
+        # 餐食类型分类统计
+        meal_type_summary = {
+            'Meal Bolus': {'count': 0, 'carbs': 0, 'times': []},
+            'Snack Bolus': {'count': 0, 'carbs': 0, 'times': []},
+            'Correction Bolus': {'count': 0, 'carbs': 0, 'times': []},
+            'Other': {'count': 0, 'carbs': 0, 'times': []}
+        }
 
         for entry in treatment_data:
             carbs = entry.get("carbs")
             protein = entry.get("protein")
             fat = entry.get("fat")
+            event_type = entry.get("eventType", "")
 
             shanghai_time = entry.get("shanghai_time", "")
             if shanghai_time and len(shanghai_time) >= 16:
@@ -3178,14 +3173,107 @@ class NightscoutWebMonitor:
                     except (ValueError, TypeError):
                         fat_value = 0
 
+                # 添加到餐食列表
                 meals.append({
                     "time": shanghai_time,
                     "carbs": carbs,
                     "protein": protein_value,
                     "fat": fat_value,
                     "notes": entry.get("notes", ""),
-                    "event_type": entry.get("eventType", "")
+                    "event_type": event_type
                 })
+                
+                # 统计餐食类型
+                if event_type in meal_type_summary:
+                    meal_type_summary[event_type]['count'] += 1
+                    meal_type_summary[event_type]['carbs'] += carbs
+                    meal_type_summary[event_type]['times'].append(shanghai_time)
+                else:
+                    meal_type_summary['Other']['count'] += 1
+                    meal_type_summary['Other']['carbs'] += carbs
+                    meal_type_summary['Other']['times'].append(shanghai_time)
+
+        # 添加餐食时间判断逻辑（在实际餐食数据处理之后）
+        current_hour = data_range['end_time'].hour
+        meal_time_analysis = ""
+        
+        # 基于实际餐食数据和分析时间生成更准确的分析时段说明
+        def is_time_in_range(time_str, start_time, end_time):
+            """检查时间是否在指定范围内"""
+            try:
+                # 处理完整的时间格式 "2025-08-13 07:37" 或简化格式 "07:37"
+                if ' ' in time_str:
+                    time_part = time_str.split(' ')[1]  # 提取时间部分
+                else:
+                    time_part = time_str
+                
+                time_hour = int(time_part.split(':')[0])
+                time_minute = int(time_part.split(':')[1])
+                start_hour = int(start_time.split(':')[0])
+                start_minute = int(start_time.split(':')[1])
+                end_hour = int(end_time.split(':')[0])
+                end_minute = int(end_time.split(':')[1])
+                
+                total_minutes = time_hour * 60 + time_minute
+                start_total = start_hour * 60 + start_minute
+                end_total = end_hour * 60 + end_minute
+                
+                return start_total <= total_minutes <= end_total
+            except (ValueError, IndexError):
+                return False
+        
+        has_breakfast = any(1 for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range(m['time'], '06:00', '10:00'))
+        has_lunch = any(1 for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range(m['time'], '11:00', '15:00'))
+        has_dinner = any(1 for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range(m['time'], '17:00', '21:00'))
+        
+        if current_hour < 10:
+            available_meals = []
+            if has_breakfast:
+                available_meals.append("早餐")
+            meal_time_analysis = f"\n**餐食分析时段**：当前时间为早晨，主要分析早餐时段数据。"
+            if available_meals:
+                meal_time_analysis += f"已有{', '.join(available_meals)}数据可供分析。"
+            else:
+                meal_time_analysis += "当前暂无早餐数据，如有加餐数据将一并分析。"
+        elif current_hour < 15:
+            available_meals = []
+            if has_breakfast:
+                available_meals.append("早餐")
+            if has_lunch:
+                available_meals.append("午餐")
+            meal_time_analysis = f"\n**餐食分析时段**：当前时间为中午。"
+            if available_meals:
+                meal_time_analysis += f"已有{', '.join(available_meals)}数据可供分析。"
+            else:
+                meal_time_analysis += "当前暂无主要餐次数据，如有加餐数据将一并分析。"
+        elif current_hour < 20:
+            available_meals = []
+            if has_breakfast:
+                available_meals.append("早餐")
+            if has_lunch:
+                available_meals.append("午餐")
+            if has_dinner:
+                available_meals.append("晚餐")
+            meal_time_analysis = f"\n**餐食分析时段**：当前时间为下午。"
+            if available_meals:
+                meal_time_analysis += f"已有{', '.join(available_meals)}数据可供分析。"
+            else:
+                meal_time_analysis += "当前暂无主要餐次数据，如有加餐数据将一并分析。"
+        else:
+            available_meals = []
+            if has_breakfast:
+                available_meals.append("早餐")
+            if has_lunch:
+                available_meals.append("午餐")
+            if has_dinner:
+                available_meals.append("晚餐")
+            meal_time_analysis = f"\n**餐食分析时段**：当前时间为晚上，可分析全天数据。"
+            if available_meals:
+                meal_time_analysis += f"已有{', '.join(available_meals)}数据可供分析。"
+            else:
+                meal_time_analysis += "当前暂无主要餐次数据，如有加餐数据将一并分析。"
+        
+        current_time_info += meal_time_analysis
 
         # 分析运动数据
         activities = []
@@ -3327,6 +3415,21 @@ class NightscoutWebMonitor:
 
         if meals:
             prompt += f"\n餐食记录（总碳水: {carbs_total}g, 总蛋白质: {protein_total}g, 总脂肪: {fat_total}g）：\n"
+            
+            # 添加餐食类型分析
+            meal_summary_parts = []
+            for meal_type, summary in meal_type_summary.items():
+                if summary['count'] > 0:
+                    type_name = {
+                        'Meal Bolus': '正餐',
+                        'Snack Bolus': '加餐',
+                        'Correction Bolus': '校正',
+                        'Other': '其他'
+                    }.get(meal_type, meal_type)
+                    meal_summary_parts.append(f"{type_name}{summary['count']}次({summary['carbs']}g碳水)")
+            
+            if meal_summary_parts:
+                prompt += f"餐食类型分析：{', '.join(meal_summary_parts)}\n"
 
             for meal in meals:
                 event_info = f"[{meal['event_type']}]" if meal['event_type'] else ""
@@ -3340,6 +3443,48 @@ class NightscoutWebMonitor:
                 nutrition_info = ", ".join(nutrition_parts)
 
                 prompt += f"• {meal['time']}: {nutrition_info} {event_info}{notes_info}\n"
+                
+            # 添加餐食时间分析
+            def is_time_in_range_meal(time_str, start_time, end_time):
+                """检查时间是否在指定范围内"""
+                try:
+                    # 处理完整的时间格式 "2025-08-13 07:37" 或简化格式 "07:37"
+                    if ' ' in time_str:
+                        time_part = time_str.split(' ')[1]  # 提取时间部分
+                    else:
+                        time_part = time_str
+                    
+                    time_hour = int(time_part.split(':')[0])
+                    time_minute = int(time_part.split(':')[1])
+                    start_hour = int(start_time.split(':')[0])
+                    start_minute = int(start_time.split(':')[1])
+                    end_hour = int(end_time.split(':')[0])
+                    end_minute = int(end_time.split(':')[1])
+                    
+                    total_minutes = time_hour * 60 + time_minute
+                    start_total = start_hour * 60 + start_minute
+                    end_total = end_hour * 60 + end_minute
+                    
+                    return start_total <= total_minutes <= end_total
+                except (ValueError, IndexError):
+                    return False
+            
+            breakfast_times = [m['time'] for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range_meal(m['time'], '06:00', '10:00')]
+            lunch_times = [m['time'] for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range_meal(m['time'], '11:00', '15:00')]
+            dinner_times = [m['time'] for m in meals if m['event_type'] in ['Meal Bolus', 'Snack Bolus'] and is_time_in_range_meal(m['time'], '17:00', '21:00')]
+            
+            meal_analysis_parts = []
+            if breakfast_times:
+                meal_analysis_parts.append(f"早餐时段({min(breakfast_times)}-{max(breakfast_times)})")
+            if lunch_times:
+                meal_analysis_parts.append(f"午餐时段({min(lunch_times)}-{max(lunch_times)})")
+            if dinner_times:
+                meal_analysis_parts.append(f"晚餐时段({min(dinner_times)}-{max(dinner_times)})")
+            
+            if meal_analysis_parts:
+                prompt += f"\n餐食时段覆盖：{'、'.join(meal_analysis_parts)}\n"
+            else:
+                prompt += f"\n餐食时段覆盖：无主要餐次记录\n"
         else:
             prompt += f"\n餐食记录：无碳水摄入记录\n"
 
