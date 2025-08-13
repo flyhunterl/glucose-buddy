@@ -2748,7 +2748,7 @@
             return;
         }
         
-        // 显示"预测"信息
+        // 恢复预测标题，三个预测值放到趋势信息中
         predictedGlucoseEl.textContent = '预测';
         predictedGlucoseEl.className = 'mb-2 text-primary';
         
@@ -2771,21 +2771,28 @@
             confidenceEl.innerHTML = `<small class="badge ${getConfidenceBadgeClass(prediction.confidence_score)}">置信度 ${prediction.confidence_score}%</small>`;
         }
         
-        // 添加预测趋势信息
-        if (prediction.prediction_points && prediction.prediction_points.length > 0) {
+        // 添加预测趋势信息（包含三个预测值）
+        if (prediction.prediction_points && prediction.prediction_points.length >= 3) {
             const trendText = getTrendDescription(prediction.prediction_points);
-            const trendEl = document.createElement('div');
-            trendEl.className = 'mt-2';
-            trendEl.innerHTML = `<small class="text-info"><i class="fas fa-chart-line"></i> ${trendText}</small>`;
+            const pred10 = prediction.prediction_points.find(p => p.minutes_ahead === 10);
+            const pred20 = prediction.prediction_points.find(p => p.minutes_ahead === 20);
+            const pred30 = prediction.prediction_points.find(p => p.minutes_ahead === 30);
             
-            // 移除旧的趋势信息
-            const oldTrendEl = confidenceEl.parentElement.querySelector('.text-info');
-            if (oldTrendEl) {
-                oldTrendEl.remove();
+            if (pred10 && pred20 && pred30) {
+                const predictionValues = `${pred10.predicted_glucose_mmol}→${pred20.predicted_glucose_mmol}→${pred30.predicted_glucose_mmol}`;
+                const trendEl = document.createElement('div');
+                trendEl.className = 'mt-2';
+                trendEl.innerHTML = `<small class="text-info"><i class="fas fa-chart-line"></i> 趋势（${trendText}）${predictionValues}</small>`;
+                
+                // 移除旧的趋势信息
+                const oldTrendEl = confidenceEl.parentElement.querySelector('.text-info');
+                if (oldTrendEl) {
+                    oldTrendEl.remove();
+                }
+                
+                // 添加新的趋势信息
+                confidenceEl.parentElement.appendChild(trendEl);
             }
-            
-            // 添加新的趋势信息
-            confidenceEl.parentElement.appendChild(trendEl);
         }
         
         // 更新风险指示器
@@ -2857,33 +2864,16 @@
         const trendChange = lastPoint.predicted_glucose_mmol - firstPoint.predicted_glucose_mmol;
         
         let trendDirection = '';
-        let trendMagnitude = '';
         
         if (Math.abs(trendChange) < 0.1) {
             trendDirection = '平稳';
-            trendMagnitude = '';
         } else if (trendChange > 0) {
             trendDirection = '上升';
-            if (trendChange < 0.5) {
-                trendMagnitude = '缓慢';
-            } else if (trendChange < 1.0) {
-                trendMagnitude = '中度';
-            } else {
-                trendMagnitude = '快速';
-            }
         } else {
             trendDirection = '下降';
-            if (Math.abs(trendChange) < 0.5) {
-                trendMagnitude = '缓慢';
-            } else if (Math.abs(trendChange) < 1.0) {
-                trendMagnitude = '中度';
-            } else {
-                trendMagnitude = '快速';
-            }
         }
         
-        const trendText = trendDirection; // 直接使用趋势方向，包括"平稳"
-        return `趋势预测：30分钟（${trendText}）${firstPoint.predicted_glucose_mmol} → ${lastPoint.predicted_glucose_mmol} mmol/L`;
+        return trendDirection;
     }
     
     // 手动预测函数

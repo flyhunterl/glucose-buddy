@@ -5108,8 +5108,8 @@ class NightscoutWebMonitor:
                 'error': str(e)
             }
 
-    def predict_glucose(self, glucose_data: List[Dict]) -> Dict:
-        """预测血糖值 - 增强版算法，整合数据质量评分、动态权重和改进置信度模型"""
+    def predict_glucose(self, glucose_data: List[Dict], treatment_data: List[Dict] = None) -> Dict:
+        """预测血糖值 - 增强版算法，整合数据质量评分、动态权重和改进置信度模型，支持饮食和运动数据增强"""
         try:
             # 1. 数据质量评估
             quality_assessment = self.calculate_data_quality_score(glucose_data)
@@ -5176,27 +5176,35 @@ class NightscoutWebMonitor:
             if len(recent_glucose_values) < 5:
                 raise ValueError("有效的血糖数据点不足")
             
-            # 3. 基于数据质量和新鲜度的动态权重趋势计算
+            # 3. 饮食和运动数据整合
+            lifestyle_factors = self._process_lifestyle_data(treatment_data, cleaned_data)
+            
+            # 4. 基于数据质量、新鲜度和生活方式因素的动态权重趋势计算
             trend_calculation = self._calculate_enhanced_trend(
-                recent_glucose_values, data_quality_scores, quality_assessment
+                recent_glucose_values, data_quality_scores, quality_assessment, lifestyle_factors
             )
             
             avg_change = trend_calculation['avg_change']
             trend_weights = trend_calculation['weights']
             trend_confidence = trend_calculation['trend_confidence']
             
-            # 4. 生成未来30分钟内的预测点（每5分钟一个，共6个点）
+            # 4. 生成未来30分钟内的预测点（仅10、20、30分钟三个点）
             prediction_points = []
             
-            for i in range(1, 7):  # 5, 10, 15, 20, 25, 30分钟
-                # 使用动态权重和趋势置信度调整预测
-                projected_change = avg_change * i * trend_confidence
+            # 生成10、20、30分钟三个预测点
+            for minutes in [10, 20, 30]:
+                # 使用动态权重和趋势置信度调整预测，考虑生活方式因素
+                time_factor = minutes / 5.0  # 相对于5分钟的倍数
+                lifestyle_adjustment = self._calculate_lifestyle_adjustment(lifestyle_factors, minutes)
+                
+                projected_change = avg_change * time_factor * trend_confidence + lifestyle_adjustment
                 predicted_value = current_glucose_mgdl + projected_change
                 prediction_points.append({
-                    'minutes_ahead': i * 5,
+                    'minutes_ahead': minutes,
                     'predicted_glucose_mgdl': round(predicted_value, 1),
                     'predicted_glucose_mmol': round(predicted_value / 18.0, 1),
-                    'confidence_adjustment': trend_confidence
+                    'confidence_adjustment': trend_confidence,
+                    'lifestyle_adjustment': round(lifestyle_adjustment, 2)
                 })
             
             predicted_glucose_mgdl = prediction_points[-1]['predicted_glucose_mgdl']
@@ -5927,7 +5935,138 @@ class NightscoutWebMonitor:
             logger.error(f"计算单个数据质量失败: {e}")
             return 50.0  # 默认中等质量
     
-    def _calculate_enhanced_trend(self, glucose_values: List[float], quality_scores: List[float], quality_assessment: Dict) -> Dict:
+    def _process_lifestyle_data(self, treatment_data: List[Dict], glucose_data: List[Dict]) -> Dict:
+        """处理饮食和运动数据，提取与血糖预测相关的生活方式因素"""
+        lifestyle_factors = {
+            'recent_meals': [],
+            'recent_exercise': [],
+            'carb_impact': 0.0,
+            'exercise_impact': 0.0,
+            'has_lifestyle_data': False
+        }
+        
+        if not treatment_data:
+            return lifestyle_factors
+        
+        try:
+            current_time = datetime.now()
+            # 考虑4小时内的饮食影响和2小时内的运动影响
+            meal_cutoff = current_time - timedelta(hours=4)
+            exercise_cutoff = current_time - timedelta(hours=2)
+            
+            for entry in treatment_data:
+                entry_time_str = entry.get('shanghai_time', '')
+                if not entry_time_str:
+                    continue
+                    
+                try:
+                    entry_time = datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
+                    event_type = entry.get('eventType', '').lower()
+                    
+                    # 处理饮食数据
+                    if any(food_keyword in event_type for food_keyword in ['餐', '食', 'breakfast', 'lunch', 'dinner', 'snack']):
+                        if entry_time >= meal_cutoff:
+                            carbs = entry.get('carbs', 0) or entry.get('carbohydrates', 0)
+                            protein = entry.get('protein', 0) or 0
+                            fat = entry.get('fat', 0) or 0
+                            
+                            meal_data = {
+                                'time': entry_time_str,
+                                'minutes_ago': int((current_time - entry_time).total_seconds() / 60),
+                                'carbs': carbs,
+                                'protein': protein,
+                                'fat': fat,
+                                'total_calories': carbs * 4 + protein * 4 + fat * 9  # 简单卡路里计算
+                            }
+                            lifestyle_factors['recent_meals'].append(meal_data)
+                            
+                            # 碳水影响估算：每克碳水预期在2-3小时内提升血糖1-2 mg/dL
+                            if carbs > 0:
+                                time_decay = max(0.1, 1.0 - meal_data['minutes_ago'] / 240.0)  # 4小时衰减
+                                lifestyle_factors['carb_impact'] += carbs * 1.5 * time_decay
+                    
+                    # 处理运动数据
+                    elif any(exercise_keyword in event_type for exercise_keyword in ['运动', 'exercise', 'activity', 'run', 'walk', 'gym']):
+                        if entry_time >= exercise_cutoff:
+                            duration = entry.get('duration', 0) or 0
+                            notes = entry.get('notes', '') or ''
+                            
+                            exercise_data = {
+                                'time': entry_time_str,
+                                'minutes_ago': int((current_time - entry_time).total_seconds() / 60),
+                                'duration': duration,
+                                'intensity': self._estimate_exercise_intensity(event_type, notes, duration)
+                            }
+                            lifestyle_factors['recent_exercise'].append(exercise_data)
+                            
+                            # 运动影响估算：中等强度运动每小时降低血糖10-20 mg/dL
+                            if duration > 0:
+                                time_decay = max(0.1, 1.0 - exercise_data['minutes_ago'] / 120.0)  # 2小时衰减
+                                intensity_factor = exercise_data['intensity']
+                                lifestyle_factors['exercise_impact'] -= duration * 0.25 * intensity_factor * time_decay
+                            
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"处理生活方式数据时时间解析失败: {entry_time_str}, 错误: {e}")
+                    continue
+            
+            lifestyle_factors['has_lifestyle_data'] = bool(
+                lifestyle_factors['recent_meals'] or lifestyle_factors['recent_exercise']
+            )
+            
+            logger.info(f"生活方式因素分析: 饮食影响={lifestyle_factors['carb_impact']:.2f}, "
+                       f"运动影响={lifestyle_factors['exercise_impact']:.2f}, "
+                       f"最近餐食={len(lifestyle_factors['recent_meals'])}, "
+                       f"最近运动={len(lifestyle_factors['recent_exercise'])}")
+            
+            return lifestyle_factors
+            
+        except Exception as e:
+            logger.error(f"处理生活方式数据失败: {e}")
+            return lifestyle_factors
+    
+    def _estimate_exercise_intensity(self, event_type: str, notes: str, duration: int) -> float:
+        """根据运动类型和时长估算运动强度"""
+        intensity = 1.0  # 默认中等强度
+        
+        event_type_lower = event_type.lower()
+        notes_lower = notes.lower()
+        
+        # 根据运动类型调整强度
+        if any(high_keyword in event_type_lower for high_keyword in ['跑', 'run', '高强度', 'hiit']):
+            intensity = 1.5
+        elif any(medium_keyword in event_type_lower for medium_keyword in ['走', 'walk', '快走', '游泳', 'swim']):
+            intensity = 1.2
+        elif any(low_keyword in event_type_lower for low_keyword in ['瑜伽', 'yoga', 'stretch', '散步']):
+            intensity = 0.8
+        
+        # 根据备注调整
+        if any(high_note in notes_lower for high_note in ['剧烈', '累', ' tired', '高强度']):
+            intensity = max(intensity, 1.4)
+        elif any(low_note in notes_lower for low_note in ['轻松', '放松', 'light', 'easy']):
+            intensity = min(intensity, 0.9)
+        
+        # 根据时长调整（过短或过长的运动强度适当降低）
+        if duration < 10:
+            intensity *= 0.8
+        elif duration > 120:
+            intensity *= 0.9
+        
+        return intensity
+    
+    def _calculate_lifestyle_adjustment(self, lifestyle_factors: Dict, minutes_ahead: int) -> float:
+        """基于生活方式数据计算预测调整值"""
+        if not lifestyle_factors['has_lifestyle_data']:
+            return 0.0
+        
+        # 时间衰减因子：预测时间越远，生活方式影响越小
+        time_decay = max(0.1, 1.0 - minutes_ahead / 60.0)
+        
+        # 总生活方式调整 = 饮食影响 + 运动影响
+        total_adjustment = (lifestyle_factors['carb_impact'] + lifestyle_factors['exercise_impact']) * time_decay
+        
+        return total_adjustment
+
+    def _calculate_enhanced_trend(self, glucose_values: List[float], quality_scores: List[float], quality_assessment: Dict, lifestyle_factors: Dict = None) -> Dict:
         """基于数据质量和新鲜度的动态权重趋势计算"""
         try:
             if len(glucose_values) < 2:
@@ -7409,13 +7548,16 @@ def api_predict_glucose():
         # 获取最近7天的血糖数据用于预测
         glucose_data = monitor.get_glucose_data_from_db(days=7)
         
+        # 获取最近7天的治疗数据用于增强预测
+        treatment_data = monitor.get_treatment_data_from_db(days=7)
+        
         # 检查用户配置是否启用了预测
         config = monitor.get_user_alert_config()
         if not config.get('enable_predictions', True):
             return jsonify({'error': '血糖预测功能已禁用'}), 400
         
-        # 执行预测
-        prediction_result = monitor.predict_glucose(glucose_data)
+        # 执行预测（包含治疗数据增强）
+        prediction_result = monitor.predict_glucose(glucose_data, treatment_data)
         
         # 保存预测结果
         monitor.save_prediction_result(prediction_result)
