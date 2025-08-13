@@ -2323,7 +2323,7 @@ class NightscoutWebMonitor:
             ],
             "temperature": 0.7,
             "top_p": 0.9,
-            "max_tokens": 800,
+            "max_tokens": 2000,
             "stream": False
         }
 
@@ -2399,13 +2399,16 @@ class NightscoutWebMonitor:
                 dynamic_range = self.get_dynamic_data_range(utc8_time)
                 logger.info(f"动态数据范围: {dynamic_range['range_description']} (UTC+8时间: {utc8_time.strftime('%Y-%m-%d %H:%M:%S')})")
                 
-                # 根据动态数据范围过滤数据
-                filtered_glucose_data = self.filter_data_by_dynamic_range(glucose_data, dynamic_range, "glucose")
-                filtered_activity_data = self.filter_data_by_dynamic_range(activity_data, dynamic_range, "activity")
-                filtered_meter_data = self.filter_data_by_dynamic_range(meter_data, dynamic_range, "meter")
+                # 暂时禁用动态数据范围过滤，使用全量数据
+                # filtered_glucose_data = self.filter_data_by_dynamic_range(glucose_data, dynamic_range, "glucose")
+                # filtered_activity_data = self.filter_data_by_dynamic_range(activity_data, dynamic_range, "activity")
+                # filtered_meter_data = self.filter_data_by_dynamic_range(meter_data, dynamic_range, "meter")
+                filtered_glucose_data = glucose_data
+                filtered_activity_data = activity_data
+                filtered_meter_data = meter_data
                 
-                # 治疗数据和血糖数据保持全日数据，活动数据和指尖血糖数据进行动态范围过滤
-                logger.info(f"动态数据范围过滤完成 - 血糖: {len(filtered_glucose_data)}(全日), 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}(全日)")
+                # 暂时禁用过滤，所有数据都使用全量数据
+                logger.info(f"数据过滤已禁用 - 血糖: {len(filtered_glucose_data)}, 活动: {len(filtered_activity_data)}, 指尖血糖: {len(filtered_meter_data)}, 治疗: {len(treatment_data)}")
                 
                 # 检查数据完整性
                 data_completeness = self.check_data_completeness(
@@ -3615,7 +3618,7 @@ class NightscoutWebMonitor:
             ],
             "temperature": 0.7,
             "top_p": 0.9,
-            "max_tokens": 500,
+            "max_tokens": 2000,
             "stream": False
         }
 
