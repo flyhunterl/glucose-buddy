@@ -1377,12 +1377,42 @@ class NightscoutWebMonitor:
                             today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if activity_data:
-            activity_data = [item for item in activity_data if item.get('shanghai_time') and 
-                           today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+            filtered_activity = []
+            for item in activity_data:
+                if item.get('shanghai_time'):
+                    try:
+                        # 尝试解析时间格式 (支持多种格式)
+                        time_str = item['shanghai_time']
+                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
+                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
+                        else:  # 数据库格式: 2025-08-13 00:20:00
+                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        
+                        if today_start <= time_dt <= today_end:
+                            filtered_activity.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"运动数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            activity_data = filtered_activity
         
         if meter_data:
-            meter_data = [item for item in meter_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+            filtered_meter = []
+            for item in meter_data:
+                if item.get('shanghai_time'):
+                    try:
+                        # 尝试解析时间格式 (支持多种格式)
+                        time_str = item['shanghai_time']
+                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
+                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
+                        else:  # 数据库格式: 2025-08-13 00:20:00
+                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        
+                        if today_start <= time_dt <= today_end:
+                            filtered_meter.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"指尖血糖数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            meter_data = filtered_meter
         
         logger.info(f"过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
@@ -6521,12 +6551,42 @@ def api_analysis():
                             today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
         
         if activity_data:
-            activity_data = [item for item in activity_data if item.get('shanghai_time') and 
-                           today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+            filtered_activity = []
+            for item in activity_data:
+                if item.get('shanghai_time'):
+                    try:
+                        # 尝试解析时间格式 (支持多种格式)
+                        time_str = item['shanghai_time']
+                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
+                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
+                        else:  # 数据库格式: 2025-08-13 00:20:00
+                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        
+                        if today_start <= time_dt <= today_end:
+                            filtered_activity.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"运动数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            activity_data = filtered_activity
         
         if meter_data:
-            meter_data = [item for item in meter_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+            filtered_meter = []
+            for item in meter_data:
+                if item.get('shanghai_time'):
+                    try:
+                        # 尝试解析时间格式 (支持多种格式)
+                        time_str = item['shanghai_time']
+                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
+                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
+                        else:  # 数据库格式: 2025-08-13 00:20:00
+                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        
+                        if today_start <= time_dt <= today_end:
+                            filtered_meter.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"指尖血糖数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            meter_data = filtered_meter
         
         logger.info(f"手动分析过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
