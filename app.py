@@ -554,6 +554,36 @@ class NightscoutWebMonitor:
             logger.error(f"时区转换失败: {utc_time_str}, 错误: {e}")
             return utc_time_str
 
+    def parse_time_string(self, time_str: str) -> datetime:
+        """
+        统一的时间字符串解析函数，支持多种格式
+        
+        Args:
+            time_str: 时间字符串，支持以下格式：
+                     - ISO格式: 2025-08-13T08:20:00.000Z
+                     - 数据库格式: 2025-08-13 08:20:00
+        
+        Returns:
+            datetime: 解析后的datetime对象（无时区信息）
+            
+        Raises:
+            ValueError: 当时间格式不支持时
+        """
+        if not time_str:
+            raise ValueError("Empty time string")
+        
+        # ISO格式: 2025-08-13T08:20:00.000Z
+        if 'T' in time_str:
+            return datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
+        
+        # 数据库格式: 2025-08-13 08:20:00
+        elif ' ' in time_str:
+            return datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+        
+        # 尝试其他可能的格式
+        else:
+            raise ValueError(f"Unsupported time format: {time_str}")
+
     def _generate_post_meal_glucose_info(self, glucose_data: List[Dict], treatment_data: List[Dict]) -> List[Dict]:
         """生成餐后血糖信息"""
         post_meal_info = []
@@ -1343,7 +1373,8 @@ class NightscoutWebMonitor:
                 # 识别运动数据
                 if event_type == 'Exercise' or '运动' in notes or '锻炼' in notes or '跑步' in notes or '乒乓球' in notes or '篮球' in notes or '游泳' in notes:
                     filtered_activity_data.append({
-                        'shanghai_time': item.get('created_at', ''),  # 使用created_at作为shanghai_time
+                        'shanghai_time': self.utc_to_shanghai_time(item.get('created_at', '')),  # 修复：转换时区和格式
+                        'created_at': item.get('created_at', ''),  # 保留原始时间戳
                         'eventType': event_type or '运动',
                         'duration': item.get('duration', 0),
                         'notes': item.get('notes', '')
@@ -1355,7 +1386,8 @@ class NightscoutWebMonitor:
                     # 确保数值是合理的mmol/L范围
                     if glucose_value and float(glucose_value) > 0:
                         filtered_meter_data.append({
-                            'shanghai_time': item.get('created_at', ''),  # 使用created_at作为shanghai_time
+                            'shanghai_time': self.utc_to_shanghai_time(item.get('created_at', '')),  # 修复：转换时区和格式
+                            'created_at': item.get('created_at', ''),  # 保留原始时间戳
                             'sgv': float(glucose_value)
                         })
 
@@ -1407,18 +1439,25 @@ class NightscoutWebMonitor:
         activity_data = self.get_activity_data_from_db(start_date=today, end_date=today)
         meter_data = self.get_meter_data_from_db(start_date=today, end_date=today)
         
-        # 过滤数据，只保留从00:00到当前时间的数据
-        glucose_data = [item for item in glucose_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+        # 过滤数据，只保留从00:00到当前时间的数据 - 使用统一时间解析
+        def filter_data_by_time(data_list):
+            """使用统一时间解析函数过滤数据"""
+            filtered_data = []
+            for item in data_list:
+                if item.get('shanghai_time'):
+                    try:
+                        time_dt = self.parse_time_string(item['shanghai_time'])
+                        if today_start <= time_dt <= today_end:
+                            filtered_data.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            return filtered_data
         
-        treatment_data = [item for item in treatment_data if item.get('shanghai_time') and 
-                         today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
-                         
-        activity_data = [item for item in activity_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
-                        
-        meter_data = [item for item in meter_data if item.get('shanghai_time') and 
-                     today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+        glucose_data = filter_data_by_time(glucose_data)
+        treatment_data = filter_data_by_time(treatment_data)
+        activity_data = filter_data_by_time(activity_data)
+        meter_data = filter_data_by_time(meter_data)
         
         logger.info(f"过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
@@ -1564,7 +1603,18 @@ class NightscoutWebMonitor:
             saved_count = 0
             for entry in activity_data:
                 try:
-                    utc_time = entry.get("created_at") or entry.get("timestamp") or ""
+                    # 支持多种可能的字段名获取UTC时间
+                    utc_time = entry.get("created_at") or entry.get("timestamp") or entry.get("dateString") or ""
+                    if not utc_time and entry.get("shanghai_time"):
+                        # 如果只有shanghai_time，尝试反向转换为UTC时间
+                        try:
+                            dt = datetime.strptime(entry["shanghai_time"], '%Y-%m-%d %H:%M:%S')
+                            # 假设shanghai_time是UTC+8，转换为UTC时间
+                            utc_dt = dt - timedelta(hours=8)
+                            utc_time = utc_dt.isoformat() + 'Z'
+                        except (ValueError, TypeError):
+                            logger.warning(f"无法从shanghai_time转换utc_time: {entry.get('shanghai_time')}")
+                            utc_time = ""
                     shanghai_time = self.utc_to_shanghai_time(utc_time)
 
                     cursor.execute("""
@@ -1601,7 +1651,18 @@ class NightscoutWebMonitor:
             saved_count = 0
             for entry in meter_data:
                 try:
-                    utc_time = entry.get("dateString", "")
+                    # 支持多种可能的字段名获取UTC时间
+                    utc_time = entry.get("dateString") or entry.get("created_at") or entry.get("timestamp") or ""
+                    if not utc_time and entry.get("shanghai_time"):
+                        # 如果只有shanghai_time，尝试反向转换为UTC时间
+                        try:
+                            dt = datetime.strptime(entry["shanghai_time"], '%Y-%m-%d %H:%M:%S')
+                            # 假设shanghai_time是UTC+8，转换为UTC时间
+                            utc_dt = dt - timedelta(hours=8)
+                            utc_time = utc_dt.isoformat() + 'Z'
+                        except (ValueError, TypeError):
+                            logger.warning(f"无法从shanghai_time转换utc_time: {entry.get('shanghai_time')}")
+                            utc_time = ""
                     shanghai_time = self.utc_to_shanghai_time(utc_time)
 
                     cursor.execute("""
@@ -6556,18 +6617,25 @@ def api_analysis():
         activity_data = monitor.get_activity_data_from_db(start_date=today, end_date=today)
         meter_data = monitor.get_meter_data_from_db(start_date=today, end_date=today)
         
-        # 过滤数据，只保留从00:00到当前时间的数据
-        glucose_data = [item for item in glucose_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+        # 过滤数据，只保留从00:00到当前时间的数据 - 使用统一时间解析
+        def filter_data_by_time(data_list):
+            """使用统一时间解析函数过滤数据"""
+            filtered_data = []
+            for item in data_list:
+                if item.get('shanghai_time'):
+                    try:
+                        time_dt = monitor.parse_time_string(item['shanghai_time'])
+                        if today_start <= time_dt <= today_end:
+                            filtered_data.append(item)
+                    except (ValueError, TypeError):
+                        logger.warning(f"数据时间解析失败: {item.get('shanghai_time')}")
+                        continue
+            return filtered_data
         
-        treatment_data = [item for item in treatment_data if item.get('shanghai_time') and 
-                         today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
-                         
-        activity_data = [item for item in activity_data if item.get('shanghai_time') and 
-                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
-                        
-        meter_data = [item for item in meter_data if item.get('shanghai_time') and 
-                     today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+        glucose_data = filter_data_by_time(glucose_data)
+        treatment_data = filter_data_by_time(treatment_data)
+        activity_data = filter_data_by_time(activity_data)
+        meter_data = filter_data_by_time(meter_data)
         
         logger.info(f"手动分析过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
