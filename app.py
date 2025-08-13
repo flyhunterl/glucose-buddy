@@ -554,6 +554,42 @@ class NightscoutWebMonitor:
             logger.error(f"时区转换失败: {utc_time_str}, 错误: {e}")
             return utc_time_str
 
+    def _generate_post_meal_glucose_info(self, glucose_data: List[Dict], treatment_data: List[Dict]) -> List[Dict]:
+        """生成餐后血糖信息"""
+        post_meal_info = []
+        
+        try:
+            # 遍历血糖数据，寻找餐后血糖（餐后2小时内）
+            for glucose_item in glucose_data:
+                glucose_time = datetime.strptime(glucose_item['shanghai_time'], '%Y-%m-%d %H:%M:%S')
+                glucose_value = self.mg_dl_to_mmol_l(glucose_item.get('sgv', 0))
+                
+                # 寻找2小时内的餐食记录
+                for treatment_item in treatment_data:
+                    if treatment_item.get('event_type') in ['Meal Bolus', 'Carb Correction']:
+                        meal_time = datetime.strptime(treatment_item['shanghai_time'], '%Y-%m-%d %H:%M:%S')
+                        time_diff = (glucose_time - meal_time).total_seconds() / 3600  # 小时
+                        
+                        # 餐后2小时内
+                        if 0 <= time_diff <= 2:
+                            post_meal_info.append({
+                                'glucose_time': glucose_item['shanghai_time'],
+                                'glucose_value': round(glucose_value, 1),
+                                'meal_time': treatment_item['shanghai_time'],
+                                'carbs': treatment_item.get('carbs', 0),
+                                'protein': treatment_item.get('protein', 0),
+                                'fat': treatment_item.get('fat', 0),
+                                'event_type': treatment_item.get('event_type', ''),
+                                'notes': treatment_item.get('notes', ''),
+                                'time_diff_hours': round(time_diff, 1)
+                            })
+                            break  # 找到一个匹配的餐食就停止
+                            
+        except Exception as e:
+            logger.error(f"生成餐后血糖信息失败: {e}")
+            
+        return post_meal_info
+
     def get_time_window_from_analysis_time(self, analysis_time: datetime = None) -> int:
         """
         根据分析时间确定时间窗口ID
@@ -1361,72 +1397,35 @@ class NightscoutWebMonitor:
         
         logger.info(f"开始执行分析，时间范围：{today} 00:00:00 到 {current_time_str}")
         
-        # 获取当天的数据
-        glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(today, today)
-        
-        # 过滤数据，只保留当天的数据（不过滤到当前时间，确保所有当天数据都包含）
+        # 使用与首页相同的数据获取方式 - 从本地数据库获取当天数据
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+        today_end = datetime.now()
         
-        if glucose_data:
-            glucose_data = [item for item in glucose_data if item.get('dateString') and 
-                          today_start <= datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
+        # 获取当天数据（与首页API逻辑一致）
+        glucose_data = self.get_glucose_data_from_db(start_date=today, end_date=today)
+        treatment_data = self.get_treatment_data_from_db(start_date=today, end_date=today)
+        activity_data = self.get_activity_data_from_db(start_date=today, end_date=today)
+        meter_data = self.get_meter_data_from_db(start_date=today, end_date=today)
         
-        if treatment_data:
-            treatment_data = [item for item in treatment_data if item.get('created_at') and 
-                            today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
+        # 过滤数据，只保留从00:00到当前时间的数据
+        glucose_data = [item for item in glucose_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
-        if activity_data:
-            filtered_activity = []
-            for item in activity_data:
-                if item.get('shanghai_time'):
-                    try:
-                        # 尝试解析时间格式 (支持多种格式)
-                        time_str = item['shanghai_time']
-                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
-                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
-                        else:  # 数据库格式: 2025-08-13 00:20:00
-                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+        treatment_data = [item for item in treatment_data if item.get('shanghai_time') and 
+                         today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+                         
+        activity_data = [item for item in activity_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
                         
-                        if today_start <= time_dt <= today_end:
-                            filtered_activity.append(item)
-                    except (ValueError, TypeError):
-                        logger.warning(f"运动数据时间解析失败: {item.get('shanghai_time')}")
-                        continue
-            activity_data = filtered_activity
-        
-        if meter_data:
-            filtered_meter = []
-            for item in meter_data:
-                if item.get('shanghai_time'):
-                    try:
-                        # 尝试解析时间格式 (支持多种格式)
-                        time_str = item['shanghai_time']
-                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
-                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
-                        else:  # 数据库格式: 2025-08-13 00:20:00
-                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                        
-                        if today_start <= time_dt <= today_end:
-                            filtered_meter.append(item)
-                    except (ValueError, TypeError):
-                        logger.warning(f"指尖血糖数据时间解析失败: {item.get('shanghai_time')}")
-                        continue
-            meter_data = filtered_meter
+        meter_data = [item for item in meter_data if item.get('shanghai_time') and 
+                     today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         logger.info(f"过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
                    f"活动: {len(activity_data) if activity_data else 0}, "
                    f"血糖仪: {len(meter_data) if meter_data else 0}")
         
-        if glucose_data:
-            await self.save_glucose_data(glucose_data)
-        if treatment_data:
-            await self.save_treatment_data(treatment_data)
-        if activity_data:
-            await self.save_activity_data(activity_data)
-        if meter_data:
-            await self.save_meter_data(meter_data)
+        # 数据已经从本地数据库获取，无需再次保存
 
         if glucose_data:
             # 使用基于时间的分析（默认启用时间窗口分析）
@@ -3561,6 +3560,24 @@ class NightscoutWebMonitor:
                 prompt += f"• {activity['time']}: {activity['duration']}分钟 {event_info}{notes_info}\n"
         else:
             prompt += f"\n运动记录：无运动记录\n"
+
+        # 添加餐后血糖信息
+        post_meal_info = self._generate_post_meal_glucose_info(glucose_data, treatment_data)
+        if post_meal_info:
+            prompt += "\n**餐后血糖详细信息：**\n"
+            for i, info in enumerate(post_meal_info, 1):
+                prompt += f"""
+{i}. ★餐后血糖
+   口餐后血糖：{info['glucose_value']}mmoL
+   对应餐食：{info['carbs']}g碳水
+   餐食类型：{info['event_type']}
+   餐食时间：{info['meal_time']}
+   测量时间：{info['glucose_time']}
+   餐后时间：{info['time_diff_hours']}小时"""
+                if info.get('notes'):
+                    prompt += f"\n   备注：{info['notes']}"
+        else:
+            prompt += "\n**餐后血糖详细信息：**\n   暂无餐后血糖数据\n"
 
         # 计算统计数据
         if glucose_mmol:
@@ -6529,71 +6546,33 @@ def api_analysis():
         
         logger.info(f"开始执行手动分析，时间范围：{today} 00:00:00 到 {current_time_str}")
         
-        # 使用与自动分析相同的数据获取方式
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # 获取当天的数据
-        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
-            monitor.fetch_nightscout_data(today, today)
-        )
-        
-        # 过滤数据，只保留当天的数据（与自动分析逻辑一致）
+        # 使用与首页相同的数据获取方式 - 从本地数据库获取当天数据
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+        today_end = datetime.now()
         
-        if glucose_data:
-            glucose_data = [item for item in glucose_data if item.get('dateString') and 
-                          today_start <= datetime.fromisoformat(item['dateString'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
+        # 获取当天数据（与首页API逻辑一致）
+        glucose_data = monitor.get_glucose_data_from_db(start_date=today, end_date=today)
+        treatment_data = monitor.get_treatment_data_from_db(start_date=today, end_date=today)
+        activity_data = monitor.get_activity_data_from_db(start_date=today, end_date=today)
+        meter_data = monitor.get_meter_data_from_db(start_date=today, end_date=today)
         
-        if treatment_data:
-            treatment_data = [item for item in treatment_data if item.get('created_at') and 
-                            today_start <= datetime.fromisoformat(item['created_at'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None) <= today_end]
+        # 过滤数据，只保留从00:00到当前时间的数据
+        glucose_data = [item for item in glucose_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
-        if activity_data:
-            filtered_activity = []
-            for item in activity_data:
-                if item.get('shanghai_time'):
-                    try:
-                        # 尝试解析时间格式 (支持多种格式)
-                        time_str = item['shanghai_time']
-                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
-                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
-                        else:  # 数据库格式: 2025-08-13 00:20:00
-                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+        treatment_data = [item for item in treatment_data if item.get('shanghai_time') and 
+                         today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
+                         
+        activity_data = [item for item in activity_data if item.get('shanghai_time') and 
+                        today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
                         
-                        if today_start <= time_dt <= today_end:
-                            filtered_activity.append(item)
-                    except (ValueError, TypeError):
-                        logger.warning(f"运动数据时间解析失败: {item.get('shanghai_time')}")
-                        continue
-            activity_data = filtered_activity
-        
-        if meter_data:
-            filtered_meter = []
-            for item in meter_data:
-                if item.get('shanghai_time'):
-                    try:
-                        # 尝试解析时间格式 (支持多种格式)
-                        time_str = item['shanghai_time']
-                        if 'T' in time_str:  # ISO格式: 2025-08-13T00:20:00.000Z
-                            time_dt = datetime.fromisoformat(time_str.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
-                        else:  # 数据库格式: 2025-08-13 00:20:00
-                            time_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                        
-                        if today_start <= time_dt <= today_end:
-                            filtered_meter.append(item)
-                    except (ValueError, TypeError):
-                        logger.warning(f"指尖血糖数据时间解析失败: {item.get('shanghai_time')}")
-                        continue
-            meter_data = filtered_meter
+        meter_data = [item for item in meter_data if item.get('shanghai_time') and 
+                     today_start <= datetime.strptime(item['shanghai_time'], '%Y-%m-%d %H:%M:%S') <= today_end]
         
         logger.info(f"手动分析过滤后数据条数 - 血糖: {len(glucose_data) if glucose_data else 0}, "
                    f"治疗: {len(treatment_data) if treatment_data else 0}, "
                    f"活动: {len(activity_data) if activity_data else 0}, "
                    f"血糖仪: {len(meter_data) if meter_data else 0}")
-        
-        loop.close()
 
         if not glucose_data:
             return jsonify({'error': '暂无血糖数据'}), 404
