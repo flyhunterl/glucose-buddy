@@ -5242,12 +5242,15 @@ class NightscoutWebMonitor:
             prediction_points = []
             
             # 生成10、20、30分钟三个预测点
+            current_time_factor = time.time() % 60 / 60.0  # 0-1之间的小时间扰动
             for minutes in [10, 20, 30]:
                 # 使用动态权重和趋势置信度调整预测，考虑生活方式因素
-                time_factor = minutes / 5.0  # 相对于5分钟的倍数
+                # 添加基于当前时间的小扰动，确保重新预测有轻微差异
+                time_noise = (current_time_factor - 0.5) * 0.2  # ±0.1的扰动
+                time_factor = (minutes / 5.0) * (1 + time_noise)  # 相对于5分钟的倍数
                 lifestyle_adjustment = self._calculate_lifestyle_adjustment(lifestyle_factors, minutes)
                 
-                projected_change = avg_change * time_factor * trend_confidence + lifestyle_adjustment
+                projected_change = avg_change * time_factor * (0.7 + 0.3 * trend_confidence) + lifestyle_adjustment * 0.8
                 predicted_value = current_glucose_mgdl + projected_change
                 prediction_points.append({
                     'minutes_ahead': minutes,
@@ -6033,7 +6036,7 @@ class NightscoutWebMonitor:
                             # 碳水影响估算：每克碳水预期在2-3小时内提升血糖1-2 mg/dL
                             if carbs > 0:
                                 time_decay = max(0.1, 1.0 - meal_data['minutes_ago'] / 240.0)  # 4小时衰减
-                                lifestyle_factors['carb_impact'] += carbs * 1.5 * time_decay
+                                lifestyle_factors['carb_impact'] += carbs * 1.2 * time_decay * (0.8 + 0.2 * time_decay)
                     
                     # 处理运动数据
                     elif any(exercise_keyword in event_type for exercise_keyword in ['运动', 'exercise', 'activity', 'run', 'walk', 'gym']):
@@ -6053,7 +6056,7 @@ class NightscoutWebMonitor:
                             if duration > 0:
                                 time_decay = max(0.1, 1.0 - exercise_data['minutes_ago'] / 120.0)  # 2小时衰减
                                 intensity_factor = exercise_data['intensity']
-                                lifestyle_factors['exercise_impact'] -= duration * 0.25 * intensity_factor * time_decay
+                                lifestyle_factors['exercise_impact'] -= duration * 0.2 * intensity_factor * time_decay * (0.7 + 0.3 * time_decay)
                             
                 except (ValueError, TypeError) as e:
                     logger.warning(f"处理生活方式数据时时间解析失败: {entry_time_str}, 错误: {e}")
