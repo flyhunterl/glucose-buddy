@@ -3466,7 +3466,7 @@ class NightscoutWebMonitor:
         analysis_guidance = self._generate_smart_analysis_guidance(current_time, data_completeness)
         
         prompt = f"""
-你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，使用动态数据范围分析方法。
+你是一位专业的内分泌科医生和糖尿病管理专家。请分析以下{days}天的血糖监测数据，使用动态数据范围分析方法。{prompt_info} {treatment_prompt}
 
 {dynamic_range_info}
 {current_time_info}
