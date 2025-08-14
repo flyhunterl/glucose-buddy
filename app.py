@@ -1382,14 +1382,23 @@ class NightscoutWebMonitor:
                 
                 # 识别指尖血糖数据（BG Check事件中的glucose值已经是mmol/L单位）
                 if event_type == 'BG Check':
-                    glucose_value = item.get('glucose', 0)
+                    glucose_value = item.get('glucose') or item.get('sgv') or item.get('mbg')
                     # 确保数值是合理的mmol/L范围
-                    if glucose_value and float(glucose_value) > 0:
-                        filtered_meter_data.append({
-                            'shanghai_time': self.utc_to_shanghai_time(item.get('created_at', '')),  # 修复：转换时区和格式
-                            'created_at': item.get('created_at', ''),  # 保留原始时间戳
-                            'sgv': float(glucose_value)
-                        })
+                    if glucose_value:
+                        try:
+                            glucose_value = float(glucose_value)
+                            if glucose_value > 0:
+                                created_at = item.get('created_at', '')
+                                filtered_meter_data.append({
+                                    'dateString': created_at,  # 添加dateString字段以保持一致性
+                                    'shanghai_time': self.utc_to_shanghai_time(created_at),  # 修复：转换时区和格式
+                                    'created_at': created_at,  # 保留原始时间戳
+                                    'sgv': glucose_value,
+                                    'glucose': glucose_value  # 保留原始字段名以确保兼容性
+                                })
+                                logger.debug(f"从治疗数据识别指尖血糖: 时间={created_at}, 血糖值={glucose_value}")
+                        except (ValueError, TypeError):
+                            logger.warning(f"指尖血糖数据数值格式错误: {glucose_value}")
 
             # 如果专用端点没有数据，使用过滤后的数据
             if not activity_data and filtered_activity_data:
@@ -1483,19 +1492,35 @@ class NightscoutWebMonitor:
 
     async def sync_recent_data(self):
         """同步最近的数据"""
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(hours=2)).strftime('%Y-%m-%d')
-        
-        glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(start_date, end_date)
-        
-        if glucose_data:
-            await self.save_glucose_data(glucose_data)
-        if treatment_data:
-            await self.save_treatment_data(treatment_data)
-        if activity_data:
-            await self.save_activity_data(activity_data)
-        if meter_data:
-            await self.save_meter_data(meter_data)
+        try:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(hours=2)).strftime('%Y-%m-%d')
+            
+            logger.info(f"开始同步数据，时间范围: {start_date} 到 {end_date}")
+            
+            glucose_data, treatment_data, activity_data, meter_data = await self.fetch_nightscout_data(start_date, end_date)
+            
+            logger.info(f"获取到数据 - 血糖: {len(glucose_data)}, 治疗: {len(treatment_data)}, 运动: {len(activity_data)}, 指尖血糖: {len(meter_data)}")
+            
+            if glucose_data:
+                logger.info(f"保存 {len(glucose_data)} 条血糖数据")
+                await self.save_glucose_data(glucose_data)
+            if treatment_data:
+                logger.info(f"保存 {len(treatment_data)} 条治疗数据")
+                await self.save_treatment_data(treatment_data)
+            if activity_data:
+                logger.info(f"保存 {len(activity_data)} 条运动数据")
+                await self.save_activity_data(activity_data)
+            if meter_data:
+                logger.info(f"保存 {len(meter_data)} 条指尖血糖数据")
+                await self.save_meter_data(meter_data)
+                
+            logger.info("数据同步完成")
+            
+        except Exception as e:
+            logger.error(f"数据同步失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def save_glucose_data(self, glucose_data: List[Dict]):
         """保存血糖数据到数据库"""
@@ -1664,26 +1689,51 @@ class NightscoutWebMonitor:
                             logger.warning(f"无法从shanghai_time转换utc_time: {entry.get('shanghai_time')}")
                             utc_time = ""
                     shanghai_time = self.utc_to_shanghai_time(utc_time)
+                    
+                    # 获取血糖值 - 支持多种字段名
+                    sgv_value = entry.get("sgv") or entry.get("glucose") or entry.get("mbg")
+                    if sgv_value is None:
+                        logger.warning(f"指尖血糖数据缺少sgv/glucose字段: {entry}")
+                        continue
+
+                    # 确保血糖值是数值类型
+                    try:
+                        sgv_value = float(sgv_value)
+                        if sgv_value <= 0:
+                            logger.warning(f"指尖血糖数据数值无效: {sgv_value}")
+                            continue
+                    except (ValueError, TypeError):
+                        logger.warning(f"指尖血糖数据数值格式错误: {sgv_value}")
+                        continue
+
+                    # 确保有date_string用于唯一性约束
+                    date_string = entry.get("dateString") or utc_time or shanghai_time
+                    if not date_string:
+                        logger.warning(f"指尖血糖数据缺少有效的时间戳: {entry}")
+                        continue
 
                     cursor.execute("""
                         INSERT OR IGNORE INTO meter_data
                         (date_string, shanghai_time, sgv)
                         VALUES (?, ?, ?)
                     """, (
-                        entry.get("dateString"),
+                        date_string,
                         shanghai_time,
-                        entry.get("sgv")
+                        sgv_value
                     ))
 
                     if cursor.rowcount > 0:
                         saved_count += 1
+                        logger.debug(f"成功保存指尖血糖数据: {date_string}, {shanghai_time}, {sgv_value}")
+                    else:
+                        logger.debug(f"指尖血糖数据已存在，跳过: {date_string}")
 
                 except Exception as e:
-                    logger.error(f"保存指尖血糖数据项失败: {e}")
+                    logger.error(f"保存指尖血糖数据项失败: {e}, 数据项: {entry}")
 
             conn.commit()
             conn.close()
-            logger.info(f"保存了 {saved_count} 条新的指尖血糖数据")
+            logger.info(f"保存了 {saved_count} 条新的指尖血糖数据，共处理 {len(meter_data)} 条数据")
 
         except Exception as e:
             logger.error(f"保存指尖血糖数据失败: {e}")
