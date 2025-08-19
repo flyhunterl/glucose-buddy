@@ -9,6 +9,9 @@
     "orientation": "portrait-primary",
     "scope": "/",
     "lang": "zh-CN",
+    "dir": "ltr",
+    "categories": ["health", "medical", "productivity"],
+    "prefer_related_applications": false,
     "icons": [
         {
             "src": "/static/ico.png",
@@ -21,8 +24,28 @@
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "any maskable"
+        },
+        {
+            "src": "/static/ico.png",
+            "sizes": "144x144",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/static/ico.png",
+            "sizes": "96x96",
+            "type": "image/png",
+            "purpose": "any"
         }
     ],
-    "categories": ["health", "medical", "productivity"],
-    "prefer_related_applications": false
+    "screenshots": [
+        {
+            "src": "/static/screenshot-mobile.png",
+            "sizes": "375x667",
+            "type": "image/png",
+            "form_factor": "phone",
+            "label": "移动端血糖监控界面"
+        }
+    ],
+    "categories": ["health", "medical", "productivity"]
 }
