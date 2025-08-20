@@ -9,46 +9,12 @@
     <meta name="theme-color" content="#007bff">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="糖小助">
+    <meta name="apple-mobile-web-app-title" content="血糖监控">
     <meta name="msapplication-TileColor" content="#007bff">
     <meta name="msapplication-config" content="/static/browserconfig.xml">
-    
-    <!-- Enhanced PWA Meta Tags -->
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="application-name" content="糖小助">
-    <meta name="apple-touch-fullscreen" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="糖小助">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, minimal-ui">
-    
+
     <!-- PWA Manifest -->
     <link rel="manifest" href="/static/manifest.json">
-    
-    <!-- Apple Icons -->
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='ico.png') }}">
-    <link rel="apple-touch-icon" sizes="57x57" href="{{ url_for('static', filename='ico.png') }}">
-    <link rel="apple-touch-icon" sizes="72x72" href="{{ url_for('static', filename='ico.png') }}">
-    <link rel="apple-touch-icon" sizes="114x114" href="{{ url_for('static', filename='ico.png') }}">
-    <link rel="apple-touch-icon" sizes="144x144" href="{{ url_for('static', filename='ico.png') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='ico.png') }}">
-    
-    <!-- Safari PWA Splash Screen -->
-    <link rel="apple-touch-startup-image" href="{{ url_for('static', filename='ico.png') }}">
-    
-    <!-- Preconnect for faster loading -->
-    <link rel="preconnect" href="https://cdn.jsdelivr.net">
-    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    
-    <!-- DNS Prefetch for CDN resources -->
-    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
-    
-    <!-- Preload critical resources -->
-    <link rel="preload" href="{{ url_for('static', filename='manifest.json') }}" as="fetch" crossorigin>
-    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" as="style">
-    <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" as="style">
 
     <!-- Icons -->
     <link rel="icon" href="{{ url_for('static', filename='ico.png') }}">
@@ -91,54 +57,6 @@
             .table-responsive { max-height: 300px; }
             .navbar-brand { font-size: 1.1rem; }
             .nav-link { font-size: 0.9rem; }
-            
-            /* PWA 模式增强 */
-            body.pwa-mode {
-                padding-top: env(safe-area-inset-top);
-                padding-bottom: env(safe-area-inset-bottom);
-                padding-left: env(safe-area-inset-left);
-                padding-right: env(safe-area-inset-right);
-            }
-            
-            body.pwa-mode .navbar {
-                padding-top: env(safe-area-inset-top);
-            }
-            
-            /* 防止 PWA 模式下的白屏问题 */
-            body.pwa-mode {
-                background-color: #f8f9fa;
-                -webkit-font-smoothing: antialiased;
-                -moz-osx-font-smoothing: grayscale;
-            }
-            
-            /* 优化加载性能 */
-            .container {
-                will-change: transform;
-                backface-visibility: hidden;
-            }
-            
-            /* 预防白屏的加载状态 */
-            body::before {
-                content: '';
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: #007bff;
-                z-index: 9999;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.3s ease;
-            }
-            
-            body.loading::before {
-                opacity: 1;
-            }
-            
-            body.loading-complete::before {
-                opacity: 0;
-            }
         }
 
         @media (max-width: 768px) {
@@ -559,47 +477,16 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
-        // Enhanced Service Worker 注册
+        // Service Worker 注册
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                // Show loading indicator
-                console.log('正在注册 Service Worker...');
-                
                 navigator.serviceWorker.register('/static/sw.js')
                     .then(function(registration) {
                         console.log('Service Worker 注册成功:', registration.scope);
-                        
-                        // Check for updates
-                        registration.addEventListener('updatefound', function() {
-                            console.log('发现新版本的 Service Worker');
-                            const installingWorker = registration.installing;
-                            
-                            installingWorker.addEventListener('statechange', function() {
-                                if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                    // New version available
-                                    console.log('新版本可用，刷新页面以更新');
-                                    showNotification('发现新版本，点击刷新', 'info', function() {
-                                        window.location.reload();
-                                    });
-                                }
-                            });
-                        });
-                        
-                        // Check for updates periodically
-                        setInterval(function() {
-                            registration.update();
-                        }, 60 * 60 * 1000); // Check every hour
                     })
                     .catch(function(error) {
                         console.log('Service Worker 注册失败:', error);
-                        // Fallback to basic functionality
-                        console.warn('PWA 功能将受限，但仍可使用基本功能');
                     });
-            });
-            
-            // Handle service worker messages
-            navigator.serviceWorker.addEventListener('message', function(event) {
-                console.log('收到 Service Worker 消息:', event.data);
             });
         }
 
@@ -633,16 +520,10 @@
             }
         });
         
-        // Enhanced 显示通知函数
-        function showNotification(message, type = 'info', callback = null) {
+        // 显示通知函数
+        function showNotification(message, type = 'info') {
             const alertDiv = document.createElement('div');
             alertDiv.className = `alert alert-${type} alert-dismissible fade show notification-toast`;
-            
-            if (callback) {
-                alertDiv.style.cursor = 'pointer';
-                alertDiv.addEventListener('click', callback);
-            }
-            
             alertDiv.innerHTML = `
                 ${message}
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
@@ -657,74 +538,6 @@
                 }
             }, 5000);
         }
-        
-        // PWA 加载状态检查
-        function checkPWALoadingStatus() {
-            // 检查是否为 PWA 模式
-            if (window.matchMedia('(display-mode: standalone)').matches || 
-                window.navigator.standalone === true) {
-                console.log('Running in PWA mode');
-                document.body.classList.add('pwa-mode');
-                
-                // 优化 PWA 模式的体验
-                document.body.style.overscrollBehavior = 'none';
-                document.body.style.webkitOverflowScrolling = 'touch';
-                
-                // 隐藏不必要的浏览器 UI
-                document.body.style.paddingTop = '0px';
-            }
-            
-            // 检查网络状态
-            function updateOnlineStatus() {
-                const isOnline = navigator.onLine;
-                console.log('Network status:', isOnline ? 'Online' : 'Offline');
-                
-                if (!isOnline) {
-                    showNotification('网络连接已断开，正在使用离线模式', 'warning');
-                } else {
-                    showNotification('网络连接已恢复', 'success');
-                }
-            }
-            
-            window.addEventListener('online', updateOnlineStatus);
-            window.addEventListener('offline', updateOnlineStatus);
-            
-            // 初始检查
-            updateOnlineStatus();
-        }
-        
-        // 页面加载完成后检查 PWA 状态
-        document.addEventListener('DOMContentLoaded', function() {
-            // 设置加载状态
-            document.body.classList.add('loading');
-            
-            // 检查 PWA 状态
-            checkPWALoadingStatus();
-            
-            // 延迟移除加载状态，防止白屏
-            setTimeout(function() {
-                document.body.classList.remove('loading');
-                document.body.classList.add('loading-complete');
-            }, 300);
-            
-            // 预缓存扩展资源
-            if ('serviceWorker' in navigator) {
-                setTimeout(function() {
-                    navigator.serviceWorker.ready.then(function(registration) {
-                        // 预缓存非关键资源
-                        registration.active.postMessage({
-                            type: 'CACHE_URLS',
-                            urls: EXTENDED_URLS
-                        });
-                    });
-                }, 2000); // 延迟2秒，避免阻塞关键资源
-            }
-        });
-        
-        // 定义扩展资源数组
-        const EXTENDED_URLS = [
-            'https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js'
-        ];
         
         // 同步数据函数
         function syncData() {
