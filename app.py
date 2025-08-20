@@ -5158,7 +5158,7 @@ class NightscoutWebMonitor:
                 'error': str(e)
             }
 
-    def predict_glucose(self, glucose_data: List[Dict], treatment_data: List[Dict] = None) -> Dict:
+    def predict_glucose(self, glucose_data: List[Dict], treatment_data: List[Dict] = None, force_current_based: bool = False) -> Dict:
         """预测血糖值 - 增强版算法，整合数据质量评分、动态权重和改进置信度模型，支持饮食和运动数据增强"""
         try:
             # 1. 数据质量评估
@@ -5241,6 +5241,14 @@ class NightscoutWebMonitor:
             # 4. 生成未来30分钟内的预测点（仅10、20、30分钟三个点）
             prediction_points = []
             
+            # 如果强制使用当前值为基础，调整预测算法
+            if force_current_based:
+                logger.info("强制使用当前血糖值为基础进行预测")
+                # 使用更保守的预测策略，主要基于当前值
+                base_change_rate = self._calculate_conservative_change_rate(recent_glucose_values[-5:], current_glucose_mgdl)
+                avg_change = base_change_rate['conservative_change']
+                trend_confidence = base_change_rate['conservative_confidence']
+            
             # 生成10、20、30分钟三个预测点
             current_time_factor = time.time() % 60 / 60.0  # 0-1之间的小时间扰动
             for minutes in [10, 20, 30]:
@@ -5303,12 +5311,110 @@ class NightscoutWebMonitor:
                 prediction_result['confidence_score'] *= 0.7
                 prediction_result['validation_warnings'] = validation_result['warnings']
             
+            # 如果校验失败且不是强制模式，尝试自动重新预测
+            if not validation_result['is_valid'] and not force_current_based:
+                logger.warning(f"预测结果校验失败，尝试自动重新预测: {validation_result['warnings']}")
+                
+                # 检查是否需要强制重新预测（趋势严重不一致或生理不合理）
+                severe_validation_failure = (
+                    'trend_inconsistency' in validation_result['validation_flags'] or
+                    'physiological_implausibility' in validation_result['validation_flags']
+                )
+                
+                if severe_validation_failure:
+                    logger.info("检测到严重预测错误，自动使用当前值重新预测")
+                    try:
+                        # 使用当前值为基础重新预测
+                        return self.predict_glucose(glucose_data, treatment_data, force_current_based=True)
+                    except Exception as retry_e:
+                        logger.error(f"自动重新预测失败: {retry_e}")
+                        # 继续返回原始预测结果
+            
+            prediction_result['validation_result'] = validation_result
+            
+            # 如果校验失败，调整预测结果
+            if not validation_result['is_valid']:
+                logger.warning(f"预测结果校验失败: {validation_result['warnings']}")
+                # 基于校验结果调整置信度
+                prediction_result['confidence_score'] *= 0.7
+                prediction_result['validation_warnings'] = validation_result['warnings']
+            
             return prediction_result
             
         except Exception as e:
             logger.error(f"增强版血糖预测失败: {e}")
             raise e
 
+    def _calculate_conservative_change_rate(self, recent_values: List[float], current_glucose: float) -> Dict:
+        """计算保守的变化率，主要用于强制基于当前值预测的情况"""
+        try:
+            if len(recent_values) < 2:
+                return {
+                    'conservative_change': 0.0,
+                    'conservative_confidence': 0.5
+                }
+            
+            # 计算短期的平均变化（最近几个点）
+            if len(recent_values) >= 3:
+                # 使用最后3个点的变化趋势
+                recent_changes = []
+                for i in range(1, min(4, len(recent_values))):
+                    change = recent_values[-i] - recent_values[-i-1]
+                    recent_changes.append(change)
+                
+                if recent_changes:
+                    # 使用中位数而不是平均值，避免极端值影响
+                    recent_changes.sort()
+                    if len(recent_changes) % 2 == 1:
+                        median_change = recent_changes[len(recent_changes) // 2]
+                    else:
+                        median_change = (recent_changes[len(recent_changes) // 2 - 1] + recent_changes[len(recent_values) // 2]) / 2
+                    
+                    # 应用保守调整因子
+                    conservative_change = median_change * 0.6  # 保守因子
+                else:
+                    conservative_change = 0.0
+            else:
+                # 数据点很少时，使用最小变化
+                conservative_change = (recent_values[-1] - recent_values[-2]) * 0.3
+            
+            # 基于当前血糖值调整变化率
+            if current_glucose > 180:
+                # 高血糖时，可能下降趋势更强
+                conservative_change = min(conservative_change, -abs(conservative_change) * 0.5)
+            elif current_glucose < 80:
+                # 低血糖时，可能上升趋势更强
+                conservative_change = max(conservative_change, abs(conservative_change) * 0.5)
+            
+            # 限制最大变化率，确保生理合理性
+            max_change = min(abs(current_glucose) * 0.1, 15.0)  # 最多10%变化或15mg/dL
+            conservative_change = max(-max_change, min(max_change, conservative_change))
+            
+            # 计算保守置信度
+            conservative_confidence = 0.7  # 保守预测的基础置信度
+            
+            # 如果数据很新，增加置信度
+            if len(recent_values) >= 5:
+                conservative_confidence += 0.1
+            
+            # 如果变化很小，增加置信度
+            if abs(conservative_change) < 3:
+                conservative_confidence += 0.1
+            
+            conservative_confidence = min(conservative_confidence, 0.9)
+            
+            return {
+                'conservative_change': conservative_change,
+                'conservative_confidence': conservative_confidence
+            }
+            
+        except Exception as e:
+            logger.error(f"保守变化率计算失败: {e}")
+            return {
+                'conservative_change': 0.0,
+                'conservative_confidence': 0.5
+            }
+    
     def calculate_data_quality_score(self, glucose_data: List[Dict]) -> Dict:
         """计算数据质量评分 - 基于及时性和一致性"""
         try:
@@ -7598,6 +7704,9 @@ def api_unread_count():
 def api_predict_glucose():
     """血糖预测API"""
     try:
+        # 获取请求参数
+        force_current = request.args.get('force_current', 'false').lower() == 'true'
+        
         # 获取最近7天的血糖数据用于预测
         glucose_data = monitor.get_glucose_data_from_db(days=7)
         
@@ -7610,7 +7719,9 @@ def api_predict_glucose():
             return jsonify({'error': '血糖预测功能已禁用'}), 400
         
         # 执行预测（包含治疗数据增强）
-        prediction_result = monitor.predict_glucose(glucose_data, treatment_data)
+        if force_current:
+            logger.info("收到强制重新预测请求，使用当前值为基础预测")
+        prediction_result = monitor.predict_glucose(glucose_data, treatment_data, force_current_based=force_current)
         
         # 保存预测结果
         monitor.save_prediction_result(prediction_result)
