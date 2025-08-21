@@ -660,6 +660,43 @@
         transition: box-shadow 0.3s ease;
     }
     
+    /* 移动端模态框滚动优化 */
+    @media (max-width: 768px) {
+        .modal-dialog {
+            margin: 0;
+            height: 100vh;
+            max-width: 100%;
+        }
+        
+        .modal-content {
+            height: 100vh;
+            border: none;
+            border-radius: 0;
+        }
+        
+        .modal-body {
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch;
+            max-height: calc(100vh - 120px);
+        }
+        
+        .modal-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background-color: white;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .modal-footer {
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+            background-color: white;
+            border-top: 1px solid #dee2e6;
+        }
+    }
+    
     /* 统一的标题样式 */
     .message-content h1, .message-content h2, .message-content h3, 
     .message-content h4, .message-content h5, .message-content h6 {
