@@ -7067,6 +7067,12 @@ def api_config():
                     'notification_methods': 'web',
                     'enable_email_alerts': alert_config.get('enable_email_alerts', False)
                 })
+                
+                # 如果启用了血糖报警邮箱通知，同时启用邮件通知
+                if alert_config.get('enable_email_alerts', False):
+                    if 'notification' not in new_config:
+                        new_config['notification'] = {}
+                    new_config['notification']['enable_email'] = True
 
             if monitor.save_config(new_config):
                 # 重新加载调度器以应用更改
