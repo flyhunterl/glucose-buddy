@@ -6668,7 +6668,7 @@ class NightscoutWebMonitor:
             
             cursor.execute("""
                 SELECT high_risk_threshold_mgdl, medium_risk_threshold_mgdl, 
-                       enable_predictions, enable_alerts, notification_methods, enable_email_alerts
+                       enable_predictions, enable_alerts, notification_methods, enable_email_alerts, enable_xxtui_alerts
                 FROM user_alert_config 
                 WHERE id = 1
             """)
@@ -6683,7 +6683,8 @@ class NightscoutWebMonitor:
                     'enable_predictions': bool(result[2]),
                     'enable_alerts': bool(result[3]),
                     'notification_methods': result[4],
-                    'enable_email_alerts': bool(result[5]) if result[5] is not None else False
+                    'enable_email_alerts': bool(result[5]) if result[5] is not None else False,
+                    'enable_xxtui_alerts': bool(result[6]) if result[6] is not None else False
                 }
             else:
                 # 返回默认配置
@@ -6693,7 +6694,8 @@ class NightscoutWebMonitor:
                     'enable_predictions': True,
                     'enable_alerts': True,
                     'notification_methods': 'web',
-                    'enable_email_alerts': False
+                    'enable_email_alerts': False,
+                    'enable_xxtui_alerts': False
                 }
                 
         except Exception as e:
@@ -6704,7 +6706,8 @@ class NightscoutWebMonitor:
                 'enable_predictions': True,
                 'enable_alerts': True,
                 'notification_methods': 'web',
-                'enable_email_alerts': False
+                'enable_email_alerts': False,
+                'enable_xxtui_alerts': False
             }
 
     def update_user_alert_config(self, config: Dict) -> bool:
