@@ -381,12 +381,24 @@
                                         <div class="form-text">血糖预测报警时发送邮件通知</div>
                                     </div>
                                 </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="enable-xxtui-alerts" 
+                                                   {% if config.alert.enable_xxtui_alerts %}checked{% endif %}>
+                                            <label class="form-check-label" for="enable-xxtui-alerts">
+                                                启用血糖报警微信/短信通知
+                                            </label>
+                                        </div>
+                                        <div class="form-text">血糖预测报警时通过xxtui发送微信/短信通知</div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- 邮件配置 -->
-                    <div class="card mb-4" id="email-config" style="{% if not config.notification.enable_email %}display: none;{% endif %}">
+                    <div class="card mb-4" id="email-config" style="{% if not config.notification.enable_email and not config.alert.enable_email_alerts %}display: none;{% endif %}">
                         <div class="card-header">
                             <h6 class="mb-0">
                                 <i class="fas fa-envelope"></i> 邮件配置
@@ -450,6 +462,48 @@
                                                value="{{ config.email.to_emails | join(', ') }}" 
                                                placeholder="email1@example.com, email2@example.com">
                                         <div class="form-text">接收通知的邮箱地址，多个用逗号分隔</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- XXUI配置 -->
+                    <div class="card mb-4" id="xxtui-config" style="{% if not config.alert.enable_xxtui_alerts %}display: none;{% endif %}">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="fas fa-mobile-alt"></i> 微信/短信配置 (XXTUI)
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <div class="mb-3">
+                                        <label for="xxtui-api-key" class="form-label">XXTUI API Key *</label>
+                                        <input type="password" class="form-control" id="xxtui-api-key" 
+                                               value="{{ config.xxtui.api_key }}" 
+                                               placeholder="请输入您的API Key">
+                                        <div class="form-text">
+                                            请访问 <a href="https://www.xxtui.com/" target="_blank">https://www.xxtui.com/</a> 申请API Key并绑定微信或手机号
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="xxtui-from" class="form-label">发送者标识</label>
+                                        <input type="text" class="form-control" id="xxtui-from" 
+                                               value="{{ config.xxtui.from }}" 
+                                               placeholder="Nightscout">
+                                        <div class="form-text">消息发送者的标识名称</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <button type="button" class="btn btn-info mt-4" onclick="testXxtuiConfig()">
+                                            <i class="fas fa-paper-plane"></i> 测试微信/短信通知
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -524,12 +578,28 @@
     });
 
     // 邮件配置显示/隐藏
-    document.getElementById('enable-email').addEventListener('change', function() {
+    function updateEmailConfigVisibility() {
         const emailConfig = document.getElementById('email-config');
-        if (this.checked) {
+        const enableEmail = document.getElementById('enable-email').checked;
+        const enableEmailAlerts = document.getElementById('enable-email-alerts').checked;
+        
+        if (enableEmail || enableEmailAlerts) {
             emailConfig.style.display = 'block';
         } else {
             emailConfig.style.display = 'none';
+        }
+    }
+    
+    document.getElementById('enable-email').addEventListener('change', updateEmailConfigVisibility);
+    document.getElementById('enable-email-alerts').addEventListener('change', updateEmailConfigVisibility);
+
+    // XXUI配置显示/隐藏
+    document.getElementById('enable-xxtui-alerts').addEventListener('change', function() {
+        const xxtuiConfig = document.getElementById('xxtui-config');
+        if (this.checked) {
+            xxtuiConfig.style.display = 'block';
+        } else {
+            xxtuiConfig.style.display = 'none';
         }
     });
     
@@ -598,7 +668,12 @@
             alert: {
                 high_glucose_threshold: parseFloat(document.getElementById('high-glucose-threshold').value) || 10.0,
                 low_glucose_threshold: parseFloat(document.getElementById('low-glucose-threshold').value) || 3.9,
-                enable_email_alerts: document.getElementById('enable-email-alerts').checked
+                enable_email_alerts: document.getElementById('enable-email-alerts').checked,
+                enable_xxtui_alerts: document.getElementById('enable-xxtui-alerts').checked
+            },
+            xxtui: {
+                api_key: document.getElementById('xxtui-api-key').value.trim(),
+                from: document.getElementById('xxtui-from').value.trim() || 'Nightscout'
             }
         };
         
@@ -627,6 +702,22 @@
                 !config.email.smtp_password || !config.email.from_email || 
                 config.email.to_emails.length === 0) {
                 showNotification('启用邮件通知时，请填写完整的邮件配置', 'danger');
+                return;
+            }
+        }
+        
+        if (config.alert.enable_email_alerts) {
+            if (!config.email.smtp_server || !config.email.smtp_username || 
+                !config.email.smtp_password || !config.email.from_email || 
+                config.email.to_emails.length === 0) {
+                showNotification('启用血糖报警邮箱通知时，请填写完整的邮件配置', 'danger');
+                return;
+            }
+        }
+        
+        if (config.alert.enable_xxtui_alerts) {
+            if (!config.xxtui.api_key) {
+                showNotification('启用微信/短信通知时，请填写XXTUI API Key', 'danger');
                 return;
             }
         }
@@ -788,6 +879,33 @@
         });
     }
     
+    // 测试XXTUI配置
+    function testXxtuiConfig() {
+        const btn = event.target;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 测试中...';
+        btn.disabled = true;
+
+        fetch('/api/test-xxtui', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('微信/短信测试成功', 'success');
+            } else {
+                showNotification(data.error || '微信/短信测试失败', 'danger');
+            }
+        })
+        .catch(error => {
+            showNotification('测试失败: ' + error.message, 'danger');
+        })
+        .finally(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        });
+    }
+    
     // 重置配置
     function resetConfig() {
         if (confirm('确定要重置所有配置吗？')) {
@@ -881,6 +999,9 @@
 
         // 加载已保存的药物治疗数据
         loadMedications();
+        
+        // 初始化邮件配置显示状态
+        updateEmailConfigVisibility();
     });
 
     // 添加药物

@@ -222,7 +222,12 @@ class NightscoutWebMonitor:
             "alert": {
                 "high_glucose_threshold": 10.0,
                 "low_glucose_threshold": 3.9,
-                "enable_email_alerts": False
+                "enable_email_alerts": False,
+                "enable_xxtui_alerts": False
+            },
+            "xxtui": {
+                "api_key": "",
+                "from": "Nightscout"
             },
             "database": {
                 "path": "data/nightscout_data.db"
@@ -257,6 +262,14 @@ class NightscoutWebMonitor:
                     for key, value in default_config["alert"].items():
                         if key not in config["alert"]:
                             config["alert"][key] = value
+                
+                # 特别确保 xxtui 字段存在
+                if "xxtui" not in config:
+                    config["xxtui"] = default_config["xxtui"].copy()
+                else:
+                    for key, value in default_config["xxtui"].items():
+                        if key not in config["xxtui"]:
+                            config["xxtui"][key] = value
                 
                 return config
             else:
@@ -457,6 +470,7 @@ class NightscoutWebMonitor:
                     enable_alerts BOOLEAN DEFAULT 1,
                     notification_methods TEXT DEFAULT 'web',
                     enable_email_alerts BOOLEAN DEFAULT 0,
+                    enable_xxtui_alerts BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -470,6 +484,13 @@ class NightscoutWebMonitor:
                 if "duplicate column name" not in str(e).lower():
                     logger.warning(f"添加enable_email_alerts字段时出错: {e}")
             
+            try:
+                cursor.execute("ALTER TABLE user_alert_config ADD COLUMN enable_xxtui_alerts BOOLEAN DEFAULT 0")
+            except sqlite3.OperationalError as e:
+                # 字段可能已存在，忽略错误
+                if "duplicate column name" not in str(e).lower():
+                    logger.warning(f"添加enable_xxtui_alerts字段时出错: {e}")
+            
             # 添加notification_time字段到hypoglycemia_alerts表
             try:
                 cursor.execute("ALTER TABLE hypoglycemia_alerts ADD COLUMN notification_time TIMESTAMP")
@@ -479,8 +500,8 @@ class NightscoutWebMonitor:
             
             # 插入默认警报配置（如果不存在）
             cursor.execute("""
-                INSERT OR IGNORE INTO user_alert_config (id, high_risk_threshold_mgdl, medium_risk_threshold_mgdl, enable_predictions, enable_alerts, notification_methods, enable_email_alerts)
-                VALUES (1, 70, 80, 1, 1, 'web', 0)
+                INSERT OR IGNORE INTO user_alert_config (id, high_risk_threshold_mgdl, medium_risk_threshold_mgdl, enable_predictions, enable_alerts, notification_methods, enable_email_alerts, enable_xxtui_alerts)
+                VALUES (1, 70, 80, 1, 1, 'web', 0, 0)
             """)
             
             conn.commit()
@@ -4211,6 +4232,64 @@ class NightscoutWebMonitor:
         
         return False
 
+    def send_xxtui_notification(self, title: str, content: str) -> bool:
+        """通过XXTUI发送微信/短信通知"""
+        start_time = time.time()
+        
+        try:
+            if not self.config.get("alert", {}).get("enable_xxtui_alerts", False):
+                logger.info("XXTUI通知已禁用，跳过发送")
+                return False
+
+            xxtui_config = self.config.get("xxtui", {})
+            api_key = xxtui_config.get("api_key")
+            from_name = xxtui_config.get("from", "Nightscout")
+            
+            if not api_key:
+                logger.warning("XXTUI API Key未配置，跳过发送")
+                return False
+
+            # 构建请求数据
+            payload = {
+                "from": from_name,
+                "title": title,
+                "content": content
+            }
+
+            # 发送请求
+            url = f"https://www.xxtui.com/xxtui/{api_key}"
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            async def send_request():
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers, timeout=30) as response:
+                        if response.status == 200:
+                            return True, await response.text()
+                        else:
+                            return False, f"HTTP {response.status}: {await response.text()}"
+
+            # 运行异步请求
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            success, result = loop.run_until_complete(send_request())
+            loop.close()
+
+            if success:
+                elapsed_time = time.time() - start_time
+                logger.info(f"XXTUI通知发送成功: {title} (耗时: {elapsed_time:.2f}秒)")
+                return True
+            else:
+                elapsed_time = time.time() - start_time
+                logger.error(f"XXTUI通知发送失败: {result} (耗时: {elapsed_time:.2f}秒)")
+                return False
+
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            logger.error(f"XXTUI通知发送异常: {e} (耗时: {elapsed_time:.2f}秒)")
+            return False
+
     def create_email_html_template(self, subject: str, content: str) -> str:
         """创建邮件HTML模板"""
         from datetime import datetime
@@ -4321,20 +4400,12 @@ class NightscoutWebMonitor:
         return re.match(pattern, email) is not None
 
     def send_glucose_alert_notification(self, risk_assessment: Dict, alert_id: int = -1):
-        """发送血糖报警邮件通知"""
+        """发送血糖报警通知（邮件和微信/短信）"""
         try:
-            # 检查是否启用了报警邮箱通知
             alert_config = self.get_user_alert_config()
-            if not alert_config.get('enable_email_alerts', False):
-                logger.info("血糖报警邮箱通知已禁用，跳过发送")
-                return False
-                
-            # 检查是否启用了邮件通知
-            if not self.config.get("notification", {}).get("enable_email", False):
-                logger.info("邮件通知已禁用，跳过发送")
-                return False
+            notification_sent = False
             
-            # 构建报警邮件内容
+            # 构建报警内容
             subject = f"血糖报警通知 - {risk_assessment['risk_level']}风险"
             content = f"""
 血糖预测报警详情：
@@ -4346,25 +4417,42 @@ class NightscoutWebMonitor:
 
 请及时采取措施。
 
-此邮件由糖小助自动发送
+此通知由糖小助自动发送
 """
             
-            # 发送邮件
-            success = self.send_email_notification(subject, content)
-            if success:
-                logger.info(f"血糖报警邮件发送成功 - 风险级别: {risk_assessment['risk_level']}")
-                
-                # 更新数据库中的通知状态
-                if alert_id > 0:
-                    self._mark_alert_notification_sent(alert_id)
-                    
-                return True
+            # 发送邮件通知
+            if alert_config.get('enable_email_alerts', False):
+                if self.config.get("notification", {}).get("enable_email", False):
+                    email_success = self.send_email_notification(subject, content)
+                    if email_success:
+                        logger.info(f"血糖报警邮件发送成功 - 风险级别: {risk_assessment['risk_level']}")
+                        notification_sent = True
+                    else:
+                        logger.error(f"血糖报警邮件发送失败 - 风险级别: {risk_assessment['risk_level']}")
+                else:
+                    logger.info("邮件通知已禁用，跳过邮件发送")
             else:
-                logger.error(f"血糖报警邮件发送失败 - 风险级别: {risk_assessment['risk_level']}")
-                return False
+                logger.info("血糖报警邮箱通知已禁用，跳过邮件发送")
+            
+            # 发送微信/短信通知
+            if alert_config.get('enable_xxtui_alerts', False):
+                xxtui_success = self.send_xxtui_notification(subject, content.strip())
+                if xxtui_success:
+                    logger.info(f"血糖报警微信/短信发送成功 - 风险级别: {risk_assessment['risk_level']}")
+                    notification_sent = True
+                else:
+                    logger.error(f"血糖报警微信/短信发送失败 - 风险级别: {risk_assessment['risk_level']}")
+            else:
+                logger.info("血糖报警微信/短信通知已禁用，跳过发送")
+            
+            # 如果有任何通知发送成功，更新数据库状态
+            if notification_sent and alert_id > 0:
+                self._mark_alert_notification_sent(alert_id)
+                    
+            return notification_sent
                 
         except Exception as e:
-            logger.error(f"发送血糖报警邮件失败: {e}")
+            logger.error(f"发送血糖报警通知失败: {e}")
             return False
 
     def _mark_alert_notification_sent(self, alert_id: int):
@@ -4584,6 +4672,56 @@ class NightscoutWebMonitor:
             return {
                 "success": False,
                 "error": f"邮件配置测试失败: {str(e)}"
+            }
+
+    def test_xxtui_configuration(self) -> Dict[str, any]:
+        """测试XXTUI配置"""
+        try:
+            xxtui_config = self.config.get("xxtui", {})
+            
+            # 检查API Key
+            api_key = xxtui_config.get("api_key")
+            if not api_key:
+                return {
+                    "success": False,
+                    "error": "XXTUI API Key未配置"
+                }
+            
+            from_name = xxtui_config.get("from", "Nightscout")
+            
+            # 构建测试消息
+            test_title = "糖小助 - XXTUI配置测试"
+            test_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            test_content = f"""
+这是一条测试消息，用于验证您的XXTUI配置是否正确。
+
+📱 发送者: {from_name}
+🔑 API Key: {api_key[:10]}...{api_key[-4:] if len(api_key) > 14 else api_key}
+⏰ 测试时间: {test_time}
+
+如果您收到这条消息，说明XXTUI配置已经成功！
+
+此消息由糖小助自动发送
+            """
+            
+            # 发送测试消息
+            success = self.send_xxtui_notification(test_title, test_content.strip())
+            
+            if success:
+                return {
+                    "success": True,
+                    "message": "XXTUI配置测试成功！测试消息已发送"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "XXTUI配置测试失败，请检查API Key是否正确"
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"XXTUI配置测试失败: {str(e)}"
             }
 
     def calculate_bmi(self) -> Dict[str, any]:
@@ -6583,6 +6721,7 @@ class NightscoutWebMonitor:
                     enable_alerts = ?,
                     notification_methods = ?,
                     enable_email_alerts = ?,
+                    enable_xxtui_alerts = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
             """, (
@@ -6591,7 +6730,8 @@ class NightscoutWebMonitor:
                 1 if config.get('enable_predictions', True) else 0,
                 1 if config.get('enable_alerts', True) else 0,
                 config.get('notification_methods', 'web'),
-                1 if config.get('enable_email_alerts', False) else 0
+                1 if config.get('enable_email_alerts', False) else 0,
+                1 if config.get('enable_xxtui_alerts', False) else 0
             ))
             
             conn.commit()
@@ -7065,14 +7205,9 @@ def api_config():
                     'enable_predictions': True,
                     'enable_alerts': True,
                     'notification_methods': 'web',
-                    'enable_email_alerts': alert_config.get('enable_email_alerts', False)
+                    'enable_email_alerts': alert_config.get('enable_email_alerts', False),
+                    'enable_xxtui_alerts': alert_config.get('enable_xxtui_alerts', False)
                 })
-                
-                # 如果启用了血糖报警邮箱通知，同时启用邮件通知
-                if alert_config.get('enable_email_alerts', False):
-                    if 'notification' not in new_config:
-                        new_config['notification'] = {}
-                    new_config['notification']['enable_email'] = True
 
             if monitor.save_config(new_config):
                 # 重新加载调度器以应用更改
@@ -7127,6 +7262,18 @@ def api_test_email():
     """测试邮件配置"""
     try:
         result = monitor.test_email_configuration()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"测试失败: {str(e)}"
+        })
+
+@app.route('/api/test-xxtui', methods=['POST'])
+def api_test_xxtui():
+    """测试XXTUI配置"""
+    try:
+        result = monitor.test_xxtui_configuration()
         return jsonify(result)
     except Exception as e:
         return jsonify({
