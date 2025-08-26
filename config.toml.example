@@ -33,6 +33,16 @@ smtp_password = "your-app-password"
 from_email = "your-email@gmail.com"
 to_emails = ["recipient@example.com"]
 
+[xxtui]
+api_key = "your-xxtui-api-key"
+from = "Nightscout"
+
+[alert]
+high_glucose_threshold = 10.0
+low_glucose_threshold = 3.9
+enable_email_alerts = false
+enable_xxtui_alerts = false
+
 [auth]
 enable = false
 password = "your-secure-password"
