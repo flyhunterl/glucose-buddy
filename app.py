@@ -62,8 +62,12 @@ def ai_retry_decorator(max_retries=3):
                     # 记录详细的错误日志
                     logger.warning(f"AI请求失败，第{retry_count}次重试 - 函数: {func.__name__}, 错误: {str(e)}")
                     
+                    # 特殊处理HTTP 524超时错误和连接错误
+                    if isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)) or "524" in str(e) or "timeout" in str(e).lower():
+                        logger.warning(f"检测到网络超时或连接错误，将进行重试")
+                    
                     if retry_count <= max_retries:
-                        # 计算指数退避时间：1s, 2s, 4s
+                        # 计算指数退避时间：1s, 2s, 4s, 8s
                         backoff_delay = 2 ** (retry_count - 1)
                         logger.info(f"等待{backoff_delay}秒后进行第{retry_count + 1}次重试...")
                         await asyncio.sleep(backoff_delay)
@@ -2477,19 +2481,37 @@ class NightscoutWebMonitor:
     @ai_retry_decorator(max_retries=3)
     async def _make_ai_analysis_request(self, prompt: str) -> str:
         """执行AI分析HTTP请求（带有重试机制）"""
-        request_data = {
-            "model": self.config["ai_config"]["model_name"],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "max_tokens": 2000,
-            "stream": False
-        }
+        # 根据不同的API提供商调整请求参数
+        model_name = self.config["ai_config"]["model_name"]
+        if model_name.startswith("glm-") or "GLM" in model_name:
+            # GLM模型使用特定参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.6,
+                "max_tokens": 1024,
+                "stream": False
+            }
+        else:
+            # 其他模型（如Ollama）使用原有参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 32000,
+                "stream": False
+            }
 
         headers = {
             "Content-Type": "application/json"
@@ -3818,19 +3840,37 @@ class NightscoutWebMonitor:
     @ai_retry_decorator(max_retries=3)
     async def _make_ai_consultation_request(self, prompt: str) -> str:
         """执行AI咨询HTTP请求（带有重试机制）"""
-        request_data = {
-            "model": self.config["ai_config"]["model_name"],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "max_tokens": 2000,
-            "stream": False
-        }
+        # 根据不同的API提供商调整请求参数
+        model_name = self.config["ai_config"]["model_name"]
+        if model_name.startswith("glm-") or "GLM" in model_name:
+            # GLM模型使用特定参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.6,
+                "max_tokens": 1024,
+                "stream": False
+            }
+        else:
+            # 其他模型（如Ollama）使用原有参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 32000,
+                "stream": False
+            }
 
         headers = {
             "Content-Type": "application/json"
@@ -7087,21 +7127,16 @@ def api_analysis():
             return jsonify({'error': '暂无血糖数据'}), 404
 
         try:
-            # 使用与自动分析相同的分析逻辑
-            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
+            # 使用与自动分析相同的分析逻辑 - 正确处理asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
             # 保存分析结果到消息表
             monitor.save_message("analysis", "血糖分析报告", analysis)
             return jsonify({'analysis': analysis})
-        except RuntimeError as e:
-            # 处理在非主线程中运行asyncio.run可能出现的问题
-            if "cannot run loop while another loop is running" in str(e):
-                loop = asyncio.get_event_loop()
-                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
-                # 保存分析结果到消息表
-                monitor.save_message("analysis", "血糖分析报告", analysis)
-                return jsonify({'analysis': analysis})
-            else:
-                raise e
+        except Exception as e:
+            logger.error(f"获取分析失败: {e}")
+            return jsonify({'error': '分析服务暂时不可用'}), 500
     except Exception as e:
         logger.error(f"获取分析失败: {e}")
         return jsonify({'error': '分析服务暂时不可用'}), 500
@@ -7122,20 +7157,13 @@ def api_ai_consult():
         days = 7
 
     try:
-        response = asyncio.run(monitor.get_ai_consultation(question, include_data, days))
+        # 正确处理asyncio，在gunicorn+eventlet环境下使用asyncio.new_event_loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
         # 保存咨询结果到消息表
         monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
         return jsonify({'response': response})
-    except RuntimeError as e:
-        # 处理在非主线程中运行asyncio.run可能出现的问题
-        if "cannot run loop while another loop is running" in str(e):
-            loop = asyncio.get_event_loop()
-            response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
-            # 保存咨询结果到消息表
-            monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
-            return jsonify({'response': response})
-        else:
-            raise e
     except Exception as e:
         logger.error(f"获取AI咨询失败: {e}")
         return jsonify({'error': 'AI咨询服务暂时不可用'}), 500
@@ -7548,17 +7576,33 @@ def api_test_ai():
             })
         
         # 创建测试请求数据
-        request_data = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "请回复'连接测试成功'来验证AI服务正常工作。"
-                }
-            ],
-            "max_tokens": 50,
-            "temperature": 0.7
-        }
+        if model_name.startswith("glm-"):
+            # GLM模型使用特定参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "请回复'连接测试成功'来验证AI服务正常工作。"
+                    }
+                ],
+                "temperature": 0.6,
+                "max_tokens": 50,
+                "stream": False
+            }
+        else:
+            # 其他模型（如Ollama）使用原有参数
+            request_data = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "请回复'连接测试成功'来验证AI服务正常工作。"
+                    }
+                ],
+                "max_tokens": 50,
+                "temperature": 0.7
+            }
         
         # 设置请求头
         headers = {
