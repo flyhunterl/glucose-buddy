@@ -2534,9 +2534,9 @@ class NightscoutWebMonitor:
         primary_request_data = request_data.copy()
         
         # 配置备用请求参数（更保守的设置）
-        backup_request_data = request_data.copy()
-        backup_request_data["max_tokens"] = min(request_data.get("max_tokens", 1024), 512)
-        backup_request_data["temperature"] = 0.3  # 更低的温度
+       # backup_request_data = request_data.copy()
+       # backup_request_data["max_tokens"] = min(request_data.get("max_tokens", 32000), 32000)
+       # backup_request_data["temperature"] = 0.6  # 更低的温度
         
         # 创建两个任务：主请求和备用请求
         session = await self._get_ai_session()
@@ -2564,35 +2564,35 @@ class NightscoutWebMonitor:
                 logger.warning(f"主请求失败: {e}")
                 return None
         
-        async def make_backup_request():
-            try:
+       # async def make_backup_request():
+        #     try:
                 # 等待主请求一段时间后再启动备用请求
-                await asyncio.sleep(stream_timeout * 0.6)
-                logger.info("启动备用AI请求")
+         #       await asyncio.sleep(stream_timeout * 0.6)
+         #        logger.info("启动备用AI请求")
                 
-                async with session.post(
-                    self.config["ai_config"]["api_url"], 
-                    json=backup_request_data, 
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=stream_timeout)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if self._validate_ai_response(result):
-                            return result
-                        else:
-                            logger.warning("备用请求返回无效响应格式")
-                            return None
-                    else:
-                        logger.warning(f"备用请求HTTP错误: {response.status}")
-                        return None
-            except Exception as e:
-                logger.warning(f"备用请求失败: {e}")
-                return None
+       #          async with session.post(
+      #               self.config["ai_config"]["api_url"], 
+      #               json=backup_request_data, 
+       #              headers=headers,
+       #              timeout=aiohttp.ClientTimeout(total=stream_timeout)
+       #          ) as response:
+        #             if response.status == 200:
+          #               result = await response.json()
+        #                 if self._validate_ai_response(result):
+        #                     return result
+         #                else:
+         #                    logger.warning("备用请求返回无效响应格式")
+         #                    return None
+         #            else:
+         #                logger.warning(f"备用请求HTTP错误: {response.status}")
+          #               return None
+         #    except Exception as e:
+          #       logger.warning(f"备用请求失败: {e}")
+          #       return None
         
         # 同时执行两个请求
         primary_task = asyncio.create_task(make_primary_request())
-        backup_task = asyncio.create_task(make_backup_request())
+       #  backup_task = asyncio.create_task(make_backup_request())
         
         try:
             # 等待任一请求完成
@@ -2703,7 +2703,7 @@ class NightscoutWebMonitor:
                     }
                 ],
                 "temperature": 0.6,
-                "max_tokens": 1024,
+                "max_tokens": 32000,
                 "stream": False
             }
         else:
@@ -4053,7 +4053,7 @@ class NightscoutWebMonitor:
                     }
                 ],
                 "temperature": 0.6,
-                "max_tokens": 1024,
+                "max_tokens": 32000,
                 "stream": False
             }
         else:
