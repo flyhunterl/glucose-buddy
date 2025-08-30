@@ -2597,7 +2597,7 @@ class NightscoutWebMonitor:
         try:
             # 等待任一请求完成
             done, pending = await asyncio.wait(
-                [primary_task, backup_task], 
+                [primary_task], 
                 return_when=asyncio.FIRST_COMPLETED,
                 timeout=stream_timeout * 1.5
             )
@@ -2621,7 +2621,7 @@ class NightscoutWebMonitor:
             
         except Exception as e:
             # 取消所有任务
-            for task in [primary_task, backup_task]:
+            for task in [primary_task]:
                 if not task.done():
                     task.cancel()
                     try:
