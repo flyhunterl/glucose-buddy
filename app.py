@@ -89,6 +89,10 @@ class NightscoutWebMonitor:
         self._cache = {}
         self._cache_lock = threading.Lock()
         self._cache_ttl = {}
+        # 添加AI连接池
+        self._ai_session_pool = None
+        # 使用线程安全的锁替代asyncio.Lock
+        self._ai_session_lock = threading.Lock()
         
     @contextmanager
     def get_db_connection(self):
@@ -193,7 +197,7 @@ class NightscoutWebMonitor:
                 "api_url": "http://localhost:11434/v1/chat/completions",
                 "api_key": "",
                 "model_name": "llama3.1:8b",
-                "timeout": 30
+                "timeout": 120
             },
             "schedule": {
                 "analysis_times": ["10:00", "15:00", "21:00"],
@@ -2478,9 +2482,214 @@ class NightscoutWebMonitor:
             logger.error(f"获取未读消息数量失败: {e}")
             return 0
 
+    async def _get_ai_session(self) -> aiohttp.ClientSession:
+        """获取AI连接池中的会话（支持keep-alive）"""
+        # 使用线程安全的锁保护AI会话访问
+        with self._ai_session_lock:
+            if self._ai_session_pool is None or self._ai_session_pool.closed:
+                # 创建带有优化的连接池配置的会话
+                timeout_config = aiohttp.ClientTimeout(
+                    total=self.config["ai_config"].get("timeout", 120),
+                    connect=30,
+                    sock_connect=30,
+                    sock_read=60
+                )
+                
+                # 创建连接器，支持keep-alive
+                connector = aiohttp.TCPConnector(
+                    limit=100,  # 总连接池大小
+                    limit_per_host=20,  # 每个主机的连接数
+                    ttl_dns_cache=300,  # DNS缓存时间
+                    use_dns_cache=True,
+                    keepalive_timeout=300,  # keep-alive超时时间
+                    enable_cleanup_closed=True
+                )
+                
+                self._ai_session_pool = aiohttp.ClientSession(
+                    timeout=timeout_config,
+                    connector=connector,
+                    headers={
+                        'User-Agent': 'glucosebuddy/1.0',
+                        'Connection': 'keep-alive'
+                    }
+                )
+                logger.info("创建新的AI连接池会话")
+            
+            return self._ai_session_pool
+
+    async def _close_ai_session(self):
+        """关闭AI连接池"""
+        # 使用线程安全的锁保护AI会话访问
+        with self._ai_session_lock:
+            if self._ai_session_pool and not self._ai_session_pool.closed:
+                await self._ai_session_pool.close()
+                self._ai_session_pool = None
+                logger.info("AI连接池已关闭")
+
+    async def _make_ai_request_dual_stream(self, request_data: dict, headers: dict, stream_timeout: int = 30) -> str:
+        """双流式AI请求处理：主请求 + 备用请求"""
+        
+        # 根据不同的API提供商调整请求参数
+        model_name = self.config["ai_config"]["model_name"]
+        primary_request_data = request_data.copy()
+        
+        # 配置备用请求参数（更保守的设置）
+        backup_request_data = request_data.copy()
+        backup_request_data["max_tokens"] = min(request_data.get("max_tokens", 1024), 512)
+        backup_request_data["temperature"] = 0.3  # 更低的温度
+        
+        # 创建两个任务：主请求和备用请求
+        session = await self._get_ai_session()
+        
+        async def make_primary_request():
+            try:
+                logger.info("启动主AI请求")
+                async with session.post(
+                    self.config["ai_config"]["api_url"], 
+                    json=primary_request_data, 
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=stream_timeout)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if self._validate_ai_response(result):
+                            return result
+                        else:
+                            logger.warning("主请求返回无效响应格式")
+                            return None
+                    else:
+                        logger.warning(f"主请求HTTP错误: {response.status}")
+                        return None
+            except Exception as e:
+                logger.warning(f"主请求失败: {e}")
+                return None
+        
+        async def make_backup_request():
+            try:
+                # 等待主请求一段时间后再启动备用请求
+                await asyncio.sleep(stream_timeout * 0.6)
+                logger.info("启动备用AI请求")
+                
+                async with session.post(
+                    self.config["ai_config"]["api_url"], 
+                    json=backup_request_data, 
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=stream_timeout)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if self._validate_ai_response(result):
+                            return result
+                        else:
+                            logger.warning("备用请求返回无效响应格式")
+                            return None
+                    else:
+                        logger.warning(f"备用请求HTTP错误: {response.status}")
+                        return None
+            except Exception as e:
+                logger.warning(f"备用请求失败: {e}")
+                return None
+        
+        # 同时执行两个请求
+        primary_task = asyncio.create_task(make_primary_request())
+        backup_task = asyncio.create_task(make_backup_request())
+        
+        try:
+            # 等待任一请求完成
+            done, pending = await asyncio.wait(
+                [primary_task, backup_task], 
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=stream_timeout * 1.5
+            )
+            
+            # 取消未完成的任务
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 获取结果
+            for task in done:
+                result = task.result()
+                if result:
+                    logger.info("双流式请求成功完成")
+                    return self._extract_ai_response(result)
+            
+            raise Exception("双流式请求均失败")
+            
+        except Exception as e:
+            # 取消所有任务
+            for task in [primary_task, backup_task]:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            raise Exception(f"双流式请求失败: {e}")
+
+    def _validate_ai_response(self, result: dict) -> bool:
+        """验证AI响应格式"""
+        if not isinstance(result, dict):
+            return False
+        
+        # 支持多种响应格式
+        if 'choices' in result and len(result['choices']) > 0:
+            choice = result['choices'][0]
+            return 'message' in choice and 'content' in choice['message']
+        elif 'content' in result:
+            return bool(result['content'])
+        elif 'text' in result:
+            return bool(result['text'])
+        elif 'candidates' in result and len(result['candidates']) > 0:
+            candidate = result['candidates'][0]
+            return 'content' in candidate and 'parts' in candidate['content']
+        elif 'data' in result:
+            return self._validate_ai_response(result['data'])
+        
+        return False
+
+    def _extract_ai_response(self, result: dict) -> str:
+        """从AI响应中提取文本内容"""
+        # OpenAI标准格式
+        if 'choices' in result and len(result['choices']) > 0:
+            choice = result['choices'][0]
+            if 'message' in choice and 'content' in choice['message']:
+                return choice['message']['content'].strip()
+        
+        # 直接content格式
+        if 'content' in result:
+            return result['content'].strip()
+        
+        # 直接text格式
+        if 'text' in result:
+            return result['text'].strip()
+        
+        # Gemini格式
+        if 'candidates' in result and len(result['candidates']) > 0:
+            candidate = result['candidates'][0]
+            if 'content' in candidate and 'parts' in candidate['content']:
+                parts = candidate['content']['parts']
+                if parts and 'text' in parts[0]:
+                    return parts[0]['text'].strip()
+        
+        # GLM数据包装格式
+        if 'data' in result:
+            return self._extract_ai_response(result['data'])
+        
+        # 其他格式尝试
+        if 'response' in result:
+            return result['response'].strip()
+        if 'answer' in result:
+            return result['answer'].strip()
+        
+        raise ValueError("无法解析AI响应格式")
+
     @ai_retry_decorator(max_retries=3)
     async def _make_ai_analysis_request(self, prompt: str) -> str:
-        """执行AI分析HTTP请求（带有重试机制）"""
+        """执行AI分析HTTP请求（带有重试机制，使用双流式处理）"""
         # 根据不同的API提供商调整请求参数
         model_name = self.config["ai_config"]["model_name"]
         if model_name.startswith("glm-") or "GLM" in model_name:
@@ -2520,18 +2729,9 @@ class NightscoutWebMonitor:
         if self.config["ai_config"]["api_key"]:
             headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
-            async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    if 'choices' in result and len(result['choices']) > 0:
-                        ai_analysis = result['choices'][0]['message']['content'].strip()
-                        return ai_analysis
-                    else:
-                        raise ValueError(f"AI响应格式错误: {result}")
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
+        # 使用双流式请求处理
+        stream_timeout = min(self.config["ai_config"].get("timeout", 120), 60)
+        return await self._make_ai_request_dual_stream(request_data, headers, stream_timeout)
 
     async def get_ai_analysis(self, glucose_data: List[Dict], treatment_data: List[Dict], activity_data: List[Dict], meter_data: List[Dict], days: int = 1, use_time_window: bool = True, use_smart_range: bool = True) -> str:
         """获取AI分析结果
@@ -3879,18 +4079,9 @@ class NightscoutWebMonitor:
         if self.config["ai_config"]["api_key"]:
             headers["Authorization"] = f"Bearer {self.config['ai_config']['api_key']}"
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.config["ai_config"]["timeout"])) as session:
-            async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    if 'choices' in result and len(result['choices']) > 0:
-                        ai_response = result['choices'][0]['message']['content'].strip()
-                        return ai_response
-                    else:
-                        raise ValueError(f"AI响应格式错误: {result}")
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
+        # 使用双流式请求处理
+        stream_timeout = min(self.config["ai_config"].get("timeout", 120), 60)
+        return await self._make_ai_request_dual_stream(request_data, headers, stream_timeout)
 
     async def get_ai_consultation(self, question: str, include_data: bool, days: int = 1) -> str:
         """获取AI咨询结果"""
@@ -6850,13 +7041,21 @@ class NightscoutWebMonitor:
             logger.error(f"确认警报失败: {e}")
             return False
 
-# 创建全局实例
-monitor = NightscoutWebMonitor()
+# 全局监控器变量（延迟初始化）
+monitor = None
+
+def get_monitor():
+    """获取监控器实例（延迟初始化）"""
+    global monitor
+    if monitor is None:
+        monitor = NightscoutWebMonitor()
+    return monitor
 
 @app.before_request
 def require_login():
     """在每个请求前检查是否需要登录"""
-    if monitor.config.get('auth', {}).get('enable'):
+    current_monitor = get_monitor()
+    if current_monitor.config.get('auth', {}).get('enable'):
         allowed_routes = ['login', 'static']
         if 'logged_in' not in session and request.endpoint not in allowed_routes:
             return redirect(url_for('login', next=request.url))
@@ -6869,13 +7068,15 @@ def index():
 @app.route('/messages')
 def messages_page():
     """消息收件箱页面"""
-    return render_template('messages.html', unread_count=monitor.get_unread_message_count())
+    current_monitor = get_monitor()
+    return render_template('messages.html', unread_count=current_monitor.get_unread_message_count())
 
 @app.route('/config')
 def config_page():
     """配置页面"""
     # 确保 config 对象包含 treatment_plan 字段
-    config = monitor.config.copy()
+    current_monitor = get_monitor()
+    config = current_monitor.config.copy()
     if 'treatment_plan' not in config:
         config['treatment_plan'] = {
             'medications': [],
@@ -6893,7 +7094,7 @@ def api_glucose_data():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     
-    glucose_data = monitor.get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
+    glucose_data = get_monitor().get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     # 转换数据格式用于前端显示
     formatted_data = []
@@ -6915,7 +7116,7 @@ def api_treatment_data():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     
-    treatment_data = monitor.get_treatment_data_from_db(days=days, start_date=start_date, end_date=end_date)
+    treatment_data = get_monitor().get_treatment_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     # 转换数据格式用于前端显示
     formatted_data = []
@@ -6940,7 +7141,7 @@ def api_activity_data():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     
-    activity_data = monitor.get_activity_data_from_db(days=days, start_date=start_date, end_date=end_date)
+    activity_data = get_monitor().get_activity_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     # 转换数据格式用于前端显示
     formatted_data = []
@@ -6962,7 +7163,7 @@ def api_meter_data():
     end_date = request.args.get('end_date')
     
     # 直接获取数据，和报表逻辑完全一致
-    meter_data = monitor.get_meter_data_from_db(days=days, start_date=start_date, end_date=end_date)
+    meter_data = get_monitor().get_meter_data_from_db(days=days, start_date=start_date, end_date=end_date)
     
     # 转换数据格式用于前端显示 - 完全对标报表逻辑
     formatted_data = []
@@ -6974,7 +7175,7 @@ def api_meter_data():
             # 寻找最接近的CGM血糖值
             cgm_mmol = None
             try:
-                conn = sqlite3.connect(monitor.get_database_path())
+                conn = sqlite3.connect(get_monitor().get_database_path())
                 cursor = conn.cursor()
                 
                 meter_time_str = entry.get('date_string', '')
@@ -7012,7 +7213,7 @@ def api_statistics():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
 
-    glucose_data = monitor.get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
+    glucose_data = get_monitor().get_glucose_data_from_db(days=days, start_date=start_date, end_date=end_date)
 
     if not glucose_data:
         return jsonify({'error': '暂无血糖数据'}), 404
@@ -7059,7 +7260,7 @@ def api_current_glucose():
     """获取当前血糖数据API"""
     try:
         # 获取最近的一条血糖数据
-        glucose_data = monitor.get_glucose_data_from_db(days=1)
+        glucose_data = get_monitor().get_glucose_data_from_db(days=1)
         if not glucose_data:
             return jsonify({'error': '暂无血糖数据'}), 404
 
@@ -7093,10 +7294,10 @@ def api_analysis():
         today_end = datetime.now()
         
         # 获取当天数据（与首页API逻辑一致）
-        glucose_data = monitor.get_glucose_data_from_db(start_date=today, end_date=today)
-        treatment_data = monitor.get_treatment_data_from_db(start_date=today, end_date=today)
-        activity_data = monitor.get_activity_data_from_db(start_date=today, end_date=today)
-        meter_data = monitor.get_meter_data_from_db(start_date=today, end_date=today)
+        glucose_data = get_monitor().get_glucose_data_from_db(start_date=today, end_date=today)
+        treatment_data = get_monitor().get_treatment_data_from_db(start_date=today, end_date=today)
+        activity_data = get_monitor().get_activity_data_from_db(start_date=today, end_date=today)
+        meter_data = get_monitor().get_meter_data_from_db(start_date=today, end_date=today)
         
         # 过滤数据，只保留从00:00到当前时间的数据 - 使用统一时间解析
         def filter_data_by_time(data_list):
@@ -7130,9 +7331,9 @@ def api_analysis():
             # 使用与自动分析相同的分析逻辑 - 正确处理asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
+            analysis = loop.run_until_complete(get_monitor().get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
             # 保存分析结果到消息表
-            monitor.save_message("analysis", "血糖分析报告", analysis)
+            get_monitor().save_message("analysis", "血糖分析报告", analysis)
             return jsonify({'analysis': analysis})
         except Exception as e:
             logger.error(f"获取分析失败: {e}")
@@ -7160,9 +7361,9 @@ def api_ai_consult():
         # 正确处理asyncio，在gunicorn+eventlet环境下使用asyncio.new_event_loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
+        response = loop.run_until_complete(get_monitor().get_ai_consultation(question, include_data, days))
         # 保存咨询结果到消息表
-        monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
+        get_monitor().save_message("consultation", f"AI咨询: {question[:30]}...", response)
         return jsonify({'response': response})
     except Exception as e:
         logger.error(f"获取AI咨询失败: {e}")
@@ -7181,17 +7382,17 @@ def api_sync():
         start_date = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
 
         glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
-            monitor.fetch_nightscout_data(start_date, end_date)
+            get_monitor().fetch_nightscout_data(start_date, end_date)
         )
 
         if glucose_data:
-            loop.run_until_complete(monitor.save_glucose_data(glucose_data))
+            loop.run_until_complete(get_monitor().save_glucose_data(glucose_data))
         if treatment_data:
-            loop.run_until_complete(monitor.save_treatment_data(treatment_data))
+            loop.run_until_complete(get_monitor().save_treatment_data(treatment_data))
         if activity_data:
-            loop.run_until_complete(monitor.save_activity_data(activity_data))
+            loop.run_until_complete(get_monitor().save_activity_data(activity_data))
         if meter_data:
-            loop.run_until_complete(monitor.save_meter_data(meter_data))
+            loop.run_until_complete(get_monitor().save_meter_data(meter_data))
 
         loop.close()
 
@@ -7211,7 +7412,7 @@ def api_sync():
 def api_config():
     """配置管理API"""
     if request.method == 'GET':
-        return jsonify(monitor.config)
+        return jsonify(get_monitor().config)
 
     elif request.method == 'POST':
         try:
@@ -7220,7 +7421,7 @@ def api_config():
             # 如果密码字段为空，则保留旧密码
             if 'auth' in new_config and 'password' in new_config['auth']:
                 if not new_config['auth']['password']:
-                    new_config['auth']['password'] = monitor.config.get('auth', {}).get('password', '')
+                    new_config['auth']['password'] = get_monitor().config.get('auth', {}).get('password', '')
 
             # 处理alert配置 - 更新数据库中的警报配置
             if 'alert' in new_config:
@@ -7230,7 +7431,7 @@ def api_config():
                 medium_risk_threshold_mgdl = (alert_config.get('low_glucose_threshold', 3.9) + 0.5) * 18.0
                 
                 # 更新警报配置
-                monitor.update_user_alert_config({
+                get_monitor().update_user_alert_config({
                     'high_risk_threshold_mgdl': high_risk_threshold_mgdl,
                     'medium_risk_threshold_mgdl': medium_risk_threshold_mgdl,
                     'enable_predictions': True,
@@ -7240,7 +7441,7 @@ def api_config():
                     'enable_xxtui_alerts': alert_config.get('enable_xxtui_alerts', False)
                 })
 
-            if monitor.save_config(new_config):
+            if get_monitor().save_config(new_config):
                 # 重新加载调度器以应用更改
                 schedule_lib.clear()
                 monitor.setup_scheduler()
@@ -7261,7 +7462,7 @@ def api_test_connection():
         # 测试获取最近1天的数据
         today = datetime.now().strftime('%Y-%m-%d')
         glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
-            monitor.fetch_nightscout_data(today, today)
+            get_monitor().fetch_nightscout_data(today, today)
         )
 
         loop.close()
@@ -7759,7 +7960,7 @@ def report_page():
             'generation_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'summary': report_data.get('summary', {}),
             'daily_data': report_data.get('daily_data', []),
-            'config': monitor.config
+            'config': get_monitor().config
         }
         
         return render_template('report.html', **context)
@@ -7776,7 +7977,7 @@ def report_page():
         }
         
         # 添加配置数据到上下文
-        context['config'] = monitor.config
+        context['config'] = get_monitor().config
         
         return render_template('report.html', **context)
 
@@ -7828,7 +8029,7 @@ def api_get_messages():
         message_type = request.args.get('type')
         limit = request.args.get('limit', 50, type=int)
         
-        messages = monitor.get_messages(message_type, limit)
+        messages = get_monitor().get_messages(message_type, limit)
         return jsonify({'messages': messages})
     except Exception as e:
         logger.error(f"获取消息列表失败: {e}")
@@ -7845,7 +8046,7 @@ def api_update_message(message_id):
         if is_read is None and is_favorite is None:
             return jsonify({'error': '缺少更新参数'}), 400
         
-        success = monitor.update_message_status(message_id, is_read, is_favorite)
+        success = get_monitor().update_message_status(message_id, is_read, is_favorite)
         if success:
             return jsonify({'success': True})
         else:
@@ -7858,7 +8059,7 @@ def api_update_message(message_id):
 def api_delete_message(message_id):
     """删除消息API"""
     try:
-        success = monitor.delete_message(message_id)
+        success = get_monitor().delete_message(message_id)
         if success:
             return jsonify({'success': True})
         else:
@@ -7877,7 +8078,7 @@ def api_delete_messages_batch():
         if not message_ids or not isinstance(message_ids, list):
             return jsonify({'error': '缺少有效的消息ID列表'}), 400
         
-        success = monitor.delete_messages_batch(message_ids)
+        success = get_monitor().delete_messages_batch(message_ids)
         if success:
             return jsonify({
                 'success': True, 
@@ -7894,7 +8095,7 @@ def api_delete_messages_batch():
 def api_unread_count():
     """获取未读消息数量API"""
     try:
-        count = monitor.get_unread_message_count()
+        count = get_monitor().get_unread_message_count()
         return jsonify({'unread_count': count})
     except Exception as e:
         logger.error(f"获取未读消息数量失败: {e}")
@@ -7908,13 +8109,13 @@ def api_predict_glucose():
         force_current = request.args.get('force_current', 'false').lower() == 'true'
         
         # 获取最近7天的血糖数据用于预测
-        glucose_data = monitor.get_glucose_data_from_db(days=7)
+        glucose_data = get_monitor().get_glucose_data_from_db(days=7)
         
         # 获取最近7天的治疗数据用于增强预测
-        treatment_data = monitor.get_treatment_data_from_db(days=7)
+        treatment_data = get_monitor().get_treatment_data_from_db(days=7)
         
         # 检查用户配置是否启用了预测
-        config = monitor.get_user_alert_config()
+        config = get_monitor().get_user_alert_config()
         if not config.get('enable_predictions', True):
             return jsonify({'error': '血糖预测功能已禁用'}), 400
         
@@ -7924,7 +8125,7 @@ def api_predict_glucose():
         prediction_result = monitor.predict_glucose(glucose_data, treatment_data, force_current_based=force_current)
         
         # 保存预测结果
-        monitor.save_prediction_result(prediction_result)
+        get_monitor().save_prediction_result(prediction_result)
         
         # 评估低血糖风险
         risk_assessment = monitor.assess_hypoglycemia_risk(prediction_result['predicted_glucose_mgdl'])
@@ -7954,7 +8155,7 @@ def api_alerts_config():
     """获取或更新警报配置API"""
     try:
         if request.method == 'GET':
-            config = monitor.get_user_alert_config()
+            config = get_monitor().get_user_alert_config()
             return jsonify(config)
         
         elif request.method == 'POST':
@@ -7975,7 +8176,7 @@ def api_alerts_config():
                 return jsonify({'error': '高风险阈值必须小于中等风险阈值'}), 400
             
             # 更新配置
-            success = monitor.update_user_alert_config(data)
+            success = get_monitor().update_user_alert_config(data)
             
             if success:
                 return jsonify({'success': True, 'message': '警报配置已更新'})
@@ -7991,7 +8192,7 @@ def api_alerts_history():
     """获取警报历史API"""
     try:
         limit = request.args.get('limit', 50, type=int)
-        alerts = monitor.get_alert_history(limit)
+        alerts = get_monitor().get_alert_history(limit)
         
         return jsonify({
             'alerts': alerts,
@@ -8029,14 +8230,14 @@ def api_alerts_acknowledge():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """登录页面"""
-    if not monitor.config.get('auth', {}).get('enable'):
+    if not get_monitor().config.get('auth', {}).get('enable'):
         return redirect(url_for('index'))
 
     if request.method == 'POST':
         password = request.form.get('password')
         remember = request.form.get('remember')
 
-        if password == monitor.config.get('auth', {}).get('password'):
+        if password == get_monitor().config.get('auth', {}).get('password'):
             session['logged_in'] = True
             if remember:
                 session.permanent = True
@@ -8096,4 +8297,17 @@ if __name__ == '__main__':
     debug = os.environ.get('DEBUG', 'False').lower() == 'true'
 
     logger.info(f"应用将在端口 {port} 启动")
-    socketio.run(app, host='0.0.0.0', port=port, debug=debug)
+    
+    # 启动应用（使用延迟初始化）
+    try:
+        socketio.run(app, host='0.0.0.0', port=port, debug=debug)
+    finally:
+        # 应用关闭时清理资源
+        try:
+            from app import get_monitor
+            current_monitor = get_monitor()
+            import asyncio
+            asyncio.run(current_monitor._close_ai_session())
+            current_monitor.cleanup_connections()
+        except Exception as e:
+            logger.warning(f"清理资源时出错: {e}")
