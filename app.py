@@ -5795,25 +5795,17 @@ class NightscoutWebMonitor:
             raise e
 
     def create_hypoglycemia_alert(self, risk_assessment: Dict) -> int:
-        """创建低血糖警报"""
+        """创建低血糖警报
+        
+        设计变更说明：
+        - 原逻辑会在存在同一风险级别的ACTIVE警报时直接跳过创建，导致后续相同风险被静默忽略
+        - 为了确保每次首页/预测触发中高风险时都能产生一条明确的报警记录并发送通知，取消同级别去重逻辑
+        """
         try:
             conn = sqlite3.connect(self.get_database_path())
             cursor = conn.cursor()
             
-            # 检查是否已有活跃的相同风险级别的警报
-            cursor.execute("""
-                SELECT id FROM hypoglycemia_alerts 
-                WHERE risk_level = ? AND alert_status = 'ACTIVE'
-                ORDER BY created_at DESC LIMIT 1
-            """, (risk_assessment['risk_level'],))
-            
-            existing_alert = cursor.fetchone()
-            if existing_alert:
-                logger.info(f"已存在活跃的{risk_assessment['risk_level']}风险警报，跳过创建")
-                conn.close()
-                return -1
-            
-            # 创建新警报
+            # 直接创建新警报，不再因为同级别已存在ACTIVE警报而跳过
             cursor.execute("""
                 INSERT INTO hypoglycemia_alerts 
                 (alert_time, predicted_glucose_mgdl, predicted_glucose_mmol, 
