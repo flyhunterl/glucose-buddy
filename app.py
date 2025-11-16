@@ -2474,138 +2474,9 @@ class NightscoutWebMonitor:
             logger.error(f"获取未读消息数量失败: {e}")
             return 0
 
-    def validate_ai_config(self) -> dict:
-        """验证AI配置的完整性和有效性"""
-        validation_result = {
-            'valid': True,
-            'errors': [],
-            'warnings': []
-        }
-        
-        try:
-            ai_config = self.config.get('ai_config', {})
-            
-            # 检查必需字段
-            required_fields = ['api_url', 'model_name']
-            for field in required_fields:
-                if field not in ai_config or not ai_config[field]:
-                    validation_result['errors'].append(f'缺少必需的配置项: {field}')
-                    validation_result['valid'] = False
-            
-            # 检查API URL格式
-            if 'api_url' in ai_config and ai_config['api_url']:
-                api_url = ai_config['api_url'].strip()
-                if not api_url.startswith(('http://', 'https://')):
-                    validation_result['errors'].append('API URL格式无效，必须以http://或https://开头')
-                    validation_result['valid'] = False
-                elif not any(domain in api_url.lower() for domain in ['openai', 'anthropic', 'cohere', 'localhost', '127.0.0.1', 'bigmodel', 'dashscope', 'deepseek', 'generativelanguage']):
-                    validation_result['warnings'].append('API URL来源未知，请确保其可靠性')
-            
-            # 检查模型名称
-            if 'model_name' in ai_config and ai_config['model_name']:
-                model_name = ai_config['model_name'].lower()
-                
-                # 检查已知的模型类型
-                if any(gpt_model in model_name for gpt_model in ['gpt-', 'gpt4', 'gpt-4']):
-                    validation_result['warnings'].append('检测到GPT模型，已自动调整token限制')
-                elif any(glm_model in model_name for glm_model in ['glm-', 'glm4', 'glm-4']):
-                    validation_result['warnings'].append('检测到GLM模型，已禁用max_tokens参数')
-                elif any(qwen_model in model_name for qwen_model in ['qwen-', 'qwen']):
-                    validation_result['warnings'].append('检测到Qwen模型，使用标准OpenAI格式')
-            
-            # 检查超时设置
-            if 'timeout' in ai_config:
-                timeout = ai_config['timeout']
-                if not isinstance(timeout, (int, float)) or timeout < 1 or timeout > 300:
-                    validation_result['errors'].append('timeout必须是1-300之间的数字')
-                    validation_result['valid'] = False
-            else:
-                validation_result['warnings'].append('未设置timeout，将使用默认值60秒')
-            
-            # 检查API密钥（仅当不是本地服务时）
-            if 'api_url' in ai_config and ai_config['api_url']:
-                api_url = ai_config['api_url'].lower()
-                if not any(local in api_url for local in ['localhost', '127.0.0.1']):
-                    if 'api_key' not in ai_config or not ai_config['api_key']:
-                        validation_result['errors'].append('非本地服务需要API密钥')
-                        validation_result['valid'] = False
-                    elif len(ai_config['api_key']) < 10:
-                        validation_result['warnings'].append('API密钥可能过短，请检查其有效性')
-            
-        except Exception as e:
-            validation_result['valid'] = False
-            validation_result['errors'].append(f'配置验证过程发生错误: {str(e)}')
-        
-        return validation_result
-
-    def parse_ai_response(self, result: dict) -> str:
-        """解析AI响应内容，支持多种模型格式
-        
-        支持的格式：
-        1. OpenAI标准格式: choices[0].message.content
-        2. 直接content格式: content
-        3. Gemini格式: candidates[0].content.parts[0].text
-        4. GLM数据包装格式: data.choices[0].content
-        5. 其他变体格式
-        """
-        try:
-            # 格式1: OpenAI标准格式
-            if 'choices' in result and len(result['choices']) > 0:
-                choice = result['choices'][0]
-                if 'message' in choice and 'content' in choice['message']:
-                    return choice['message']['content'].strip()
-                elif 'content' in choice:
-                    return choice['content'].strip()
-                elif 'text' in choice:
-                    return choice['text'].strip()
-            
-            # 格式2: 直接content格式
-            if 'content' in result:
-                return result['content'].strip()
-            
-            # 格式3: 直接text格式
-            if 'text' in result:
-                return result['text'].strip()
-            
-            # 格式4: response格式
-            if 'response' in result:
-                return result['response'].strip()
-            
-            # 格式5: answer格式
-            if 'answer' in result:
-                return result['answer'].strip()
-            
-            # 格式6: Gemini格式
-            if 'candidates' in result and len(result['candidates']) > 0:
-                candidate = result['candidates'][0]
-                if 'content' in candidate and 'parts' in candidate['content'] and len(candidate['content']['parts']) > 0:
-                    return candidate['content']['parts'][0]['text'].strip()
-            
-            # 格式7: GLM数据包装格式
-            if 'data' in result and 'choices' in result['data'] and len(result['data']['choices']) > 0:
-                choice = result['data']['choices'][0]
-                if 'content' in choice:
-                    return choice['content'].strip()
-                elif 'message' in choice and 'content' in choice['message']:
-                    return choice['message']['content'].strip()
-            
-            # 如果都没有找到，记录错误并抛出异常
-            logger.error(f"无法解析AI响应格式，可用字段: {list(result.keys())}")
-            logger.error(f"完整响应: {result}")
-            raise ValueError(f"不支持的AI响应格式: {result}")
-            
-        except Exception as e:
-            logger.error(f"解析AI响应时发生错误: {e}")
-            logger.error(f"响应内容: {result}")
-            raise ValueError(f"AI响应解析失败: {e}")
-
     @ai_retry_decorator(max_retries=3)
     async def _make_ai_analysis_request(self, prompt: str) -> str:
         """执行AI分析HTTP请求（带有重试机制）"""
-        # 动态设置max_tokens，如果是GPT模型则设置更高的限制
-        model_name = self.config["ai_config"]["model_name"].lower()
-        max_tokens = 4000 if any(gpt_model in model_name for gpt_model in ['gpt-', 'gpt4', 'gpt-4']) else 2000
-        
         request_data = {
             "model": self.config["ai_config"]["model_name"],
             "messages": [
@@ -2616,13 +2487,9 @@ class NightscoutWebMonitor:
             ],
             "temperature": 0.7,
             "top_p": 0.9,
-            "max_tokens": 2000,
+            "max_tokens": 16000,
             "stream": False
         }
-        
-        # 只在非GLM模型时添加max_tokens，GLM模型可能不支持此参数
-        if not any(glm_model in model_name for glm_model in ['glm-', 'glm4', 'glm-4']):
-            request_data["max_tokens"] = max_tokens
 
         headers = {
             "Content-Type": "application/json"
@@ -2635,12 +2502,11 @@ class NightscoutWebMonitor:
             async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
                 if response.status == 200:
                     result = await response.json()
-                    try:
-                        ai_analysis = self.parse_ai_response(result)
+                    if 'choices' in result and len(result['choices']) > 0:
+                        ai_analysis = result['choices'][0]['message']['content'].strip()
                         return ai_analysis
-                    except ValueError as e:
-                        logger.error(f"AI响应解析失败: {e}")
-                        raise e
+                    else:
+                        raise ValueError(f"AI响应格式错误: {result}")
                 else:
                     error_text = await response.text()
                     raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
@@ -3952,10 +3818,6 @@ class NightscoutWebMonitor:
     @ai_retry_decorator(max_retries=3)
     async def _make_ai_consultation_request(self, prompt: str) -> str:
         """执行AI咨询HTTP请求（带有重试机制）"""
-        # 动态设置max_tokens，如果是GPT模型则设置更高的限制
-        model_name = self.config["ai_config"]["model_name"].lower()
-        max_tokens = 4000 if any(gpt_model in model_name for gpt_model in ['gpt-', 'gpt4', 'gpt-4']) else 2000
-        
         request_data = {
             "model": self.config["ai_config"]["model_name"],
             "messages": [
@@ -3966,13 +3828,9 @@ class NightscoutWebMonitor:
             ],
             "temperature": 0.7,
             "top_p": 0.9,
-            "max_tokens": 2000,
+            "max_tokens": 16000,
             "stream": False
         }
-        
-        # 只在非GLM模型时添加max_tokens，GLM模型可能不支持此参数
-        if not any(glm_model in model_name for glm_model in ['glm-', 'glm4', 'glm-4']):
-            request_data["max_tokens"] = max_tokens
 
         headers = {
             "Content-Type": "application/json"
@@ -3985,12 +3843,11 @@ class NightscoutWebMonitor:
             async with session.post(self.config["ai_config"]["api_url"], json=request_data, headers=headers) as response:
                 if response.status == 200:
                     result = await response.json()
-                    try:
-                        ai_response = self.parse_ai_response(result)
+                    if 'choices' in result and len(result['choices']) > 0:
+                        ai_response = result['choices'][0]['message']['content'].strip()
                         return ai_response
-                    except ValueError as e:
-                        logger.error(f"AI咨询响应解析失败: {e}")
-                        raise e
+                    else:
+                        raise ValueError(f"AI响应格式错误: {result}")
                 else:
                     error_text = await response.text()
                     raise Exception(f"AI请求HTTP错误: {response.status} - {error_text}")
@@ -7699,12 +7556,9 @@ def api_test_ai():
                     "content": "请回复'连接测试成功'来验证AI服务正常工作。"
                 }
             ],
+            "max_tokens": 50,
             "temperature": 0.7
         }
-        
-        # 只在非GLM模型时添加max_tokens，GLM模型可能不支持此参数
-        if not any(glm_model in model_name.lower() for glm_model in ['glm-', 'glm4', 'glm-4']):
-            request_data["max_tokens"] = 50
         
         # 设置请求头
         headers = {
@@ -7732,55 +7586,6 @@ def api_test_ai():
             "error": f"测试失败: {str(e)}"
         })
 
-def parse_ai_response_static(result: dict) -> str:
-    """静态版本的AI响应解析器，用于连接测试"""
-    try:
-        # 格式1: OpenAI标准格式
-        if 'choices' in result and len(result['choices']) > 0:
-            choice = result['choices'][0]
-            if 'message' in choice and 'content' in choice['message']:
-                return choice['message']['content'].strip()
-            elif 'content' in choice:
-                return choice['content'].strip()
-            elif 'text' in choice:
-                return choice['text'].strip()
-        
-        # 格式2: 直接content格式
-        if 'content' in result:
-            return result['content'].strip()
-        
-        # 格式3: 直接text格式
-        if 'text' in result:
-            return result['text'].strip()
-        
-        # 格式4: response格式
-        if 'response' in result:
-            return result['response'].strip()
-        
-        # 格式5: answer格式
-        if 'answer' in result:
-            return result['answer'].strip()
-        
-        # 格式6: Gemini格式
-        if 'candidates' in result and len(result['candidates']) > 0:
-            candidate = result['candidates'][0]
-            if 'content' in candidate and 'parts' in candidate['content'] and len(candidate['content']['parts']) > 0:
-                return candidate['content']['parts'][0]['text'].strip()
-        
-        # 格式7: GLM数据包装格式
-        if 'data' in result and 'choices' in result['data'] and len(result['data']['choices']) > 0:
-            choice = result['data']['choices'][0]
-            if 'content' in choice:
-                return choice['content'].strip()
-            elif 'message' in choice and 'content' in choice['message']:
-                return choice['message']['content'].strip()
-        
-        # 如果都没有找到，抛出异常
-        raise ValueError(f"不支持的AI响应格式，可用字段: {list(result.keys())}")
-        
-    except Exception as e:
-        raise ValueError(f"AI响应解析失败: {e}")
-
 @ai_retry_decorator(max_retries=3)
 async def _make_ai_connection_request(api_url: str, headers: dict, request_data: dict, timeout: int) -> dict:
     """执行AI连接测试HTTP请求（带有重试机制）"""
@@ -7789,20 +7594,24 @@ async def _make_ai_connection_request(api_url: str, headers: dict, request_data:
             if response.status == 200:
                 result = await response.json()
                 
-                try:
-                    # 使用多格式解析器
-                    ai_response = parse_ai_response_static(result)
-                    
-                    # 验证AI响应内容
-                    if ai_response:
-                        return {
-                            "success": True,
-                            "message": f"AI连接正常，模型响应: {ai_response[:50]}{'...' if len(ai_response) > 50 else ''}"
-                        }
+                # 验证响应格式
+                if 'choices' in result and len(result['choices']) > 0:
+                    choice = result['choices'][0]
+                    if 'message' in choice and 'content' in choice['message']:
+                        ai_response = choice['message']['content'].strip()
+                        
+                        # 验证AI响应内容
+                        if ai_response:
+                            return {
+                                "success": True,
+                                "message": f"AI连接正常，模型响应: {ai_response[:50]}{'...' if len(ai_response) > 50 else ''}"
+                            }
+                        else:
+                            raise ValueError("AI响应内容为空")
                     else:
-                        raise ValueError("AI响应内容为空")
-                except ValueError as e:
-                    raise ValueError(f"AI响应解析失败: {e}")
+                        raise ValueError("AI响应格式错误，缺少message或content字段")
+                else:
+                    raise ValueError("AI响应格式错误，缺少choices字段")
             else:
                 error_text = await response.text()
                 raise Exception(f"HTTP {response.status}: {error_text[:200]}")
