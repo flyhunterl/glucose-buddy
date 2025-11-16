@@ -16,6 +16,12 @@ api_key = "your-ai-api-key"
 model_name = "llama3.1:8b"
 timeout = 60
 
+# GLM-4.5模型配置示例
+# 如果使用智谱AI的GLM-4.5模型，请使用以下配置：
+# api_url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+# api_key = "your-glm-api-key"
+# model_name = "glm-4.5"  # 支持的变体: glm-4.5, glm-4.5-air, glm-4.5-flash
+
 [schedule]
 analysis_times = ["10:00", "15:00", "21:00"]
 enable_auto_analysis = false
