@@ -34,6 +34,37 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+def run_async_safely(async_func, *args, **kwargs):
+    """在同步代码里安全运行协程函数。
+    
+    正常情况下直接使用 asyncio.run；如果当前线程已经有事件循环在跑（例如某些测试环境/嵌套调用），
+    就退化为在新线程里运行，避免直接抛 RuntimeError。
+    """
+    try:
+        return asyncio.run(async_func(*args, **kwargs))
+    except RuntimeError as e:
+        msg = str(e)
+        if ("asyncio.run() cannot be called from a running event loop" not in msg
+                and "cannot run the event loop while another loop is running" not in msg):
+            raise
+
+        result_holder = {}
+        error_holder = {}
+
+        def _runner():
+            try:
+                result_holder["result"] = asyncio.run(async_func(*args, **kwargs))
+            except Exception as ex:
+                error_holder["error"] = ex
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join()
+
+        if "error" in error_holder:
+            raise error_holder["error"]
+        return result_holder.get("result")
+
 def ai_retry_decorator(max_retries=3):
     """
     AI服务请求的重试装饰器
@@ -171,7 +202,7 @@ class NightscoutWebMonitor:
         
     def load_config(self):
         """加载配置文件"""
-        config_path = "config.toml"
+        config_path = self._get_config_path()
         default_config = {
             "basic": {
                 "enable": True,
@@ -278,16 +309,31 @@ class NightscoutWebMonitor:
             logger.error(f"加载配置文件失败: {e}")
             return default_config.copy()
 
+    def _get_config_path(self) -> str:
+        """获取配置文件路径，支持环境变量与Docker默认路径。"""
+        env_path = os.environ.get("NIGHTSCOUT_CONFIG_PATH")
+        if env_path:
+            return env_path
+        if os.path.exists("/.dockerenv"):
+            return "/app/config.toml"
+        return "config.toml"
+
     def get_database_path(self):
         """获取数据库文件路径，支持环境变量和配置文件"""
         # 1. 优先检查环境变量
         env_db_path = os.environ.get('NIGHTSCOUT_DB_PATH')
         if env_db_path:
             logger.info(f"使用环境变量中的数据库路径: {env_db_path}")
+            db_dir = os.path.dirname(env_db_path)
+            if env_db_path != ":memory:" and db_dir:
+                os.makedirs(db_dir, exist_ok=True)
             return env_db_path
         
         # 2. 使用配置文件中的路径
         db_path = self.config.get("database", {}).get("path", "data/nightscout_data.db")
+        db_dir = os.path.dirname(db_path)
+        if db_path != ":memory:" and db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         
         # 3. 检查是否是Docker环境，如果是则使用Docker专用路径
         if os.path.exists("/.dockerenv"):
@@ -304,7 +350,7 @@ class NightscoutWebMonitor:
         """保存配置文件"""
         try:
             import toml
-            config_path = "/app/config.toml"
+            config_path = self._get_config_path()
             with open(config_path, "w", encoding="utf-8") as f:
                 toml.dump(config, f)
             self.config = config
@@ -1444,14 +1490,14 @@ class NightscoutWebMonitor:
     def scheduled_analysis(self):
         """定时分析任务"""
         try:
-            asyncio.run(self.perform_analysis_and_notify())
+            run_async_safely(self.perform_analysis_and_notify)
         except Exception as e:
             logger.error(f"定时分析失败: {e}")
 
     def scheduled_sync(self):
         """定时同步任务"""
         try:
-            asyncio.run(self.sync_recent_data())
+            run_async_safely(self.sync_recent_data)
         except Exception as e:
             logger.error(f"定时同步失败: {e}")
 
@@ -4278,11 +4324,8 @@ class NightscoutWebMonitor:
                         else:
                             return False, f"HTTP {response.status}: {await response.text()}"
 
-            # 运行异步请求
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            success, result = loop.run_until_complete(send_request())
-            loop.close()
+            # 运行异步请求（避免事件循环泄漏）
+            success, result = run_async_safely(send_request)
 
             if success:
                 elapsed_time = time.time() - start_time
@@ -7087,22 +7130,19 @@ def api_analysis():
         if not glucose_data:
             return jsonify({'error': '暂无血糖数据'}), 404
 
-        try:
-            # 使用与自动分析相同的分析逻辑
-            analysis = asyncio.run(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
-            # 保存分析结果到消息表
-            monitor.save_message("analysis", "血糖分析报告", analysis)
-            return jsonify({'analysis': analysis})
-        except RuntimeError as e:
-            # 处理在非主线程中运行asyncio.run可能出现的问题
-            if "cannot run loop while another loop is running" in str(e):
-                loop = asyncio.get_event_loop()
-                analysis = loop.run_until_complete(monitor.get_ai_analysis(glucose_data, treatment_data, activity_data, meter_data, 1, use_time_window=True))
-                # 保存分析结果到消息表
-                monitor.save_message("analysis", "血糖分析报告", analysis)
-                return jsonify({'analysis': analysis})
-            else:
-                raise e
+        # 使用与自动分析相同的分析逻辑
+        analysis = run_async_safely(
+            monitor.get_ai_analysis,
+            glucose_data,
+            treatment_data,
+            activity_data,
+            meter_data,
+            1,
+            use_time_window=True
+        )
+        # 保存分析结果到消息表
+        monitor.save_message("analysis", "血糖分析报告", analysis)
+        return jsonify({'analysis': analysis})
     except Exception as e:
         logger.error(f"获取分析失败: {e}")
         return jsonify({'error': '分析服务暂时不可用'}), 500
@@ -7115,7 +7155,6 @@ def api_ai_consult():
         return jsonify({'error': '缺少问题参数'}), 400
 
     question = data['question']
-    question = data['question']
     include_data = data.get('include_data', True)
     try:
         days = int(data.get('days', 7))
@@ -7123,20 +7162,10 @@ def api_ai_consult():
         days = 7
 
     try:
-        response = asyncio.run(monitor.get_ai_consultation(question, include_data, days))
+        response = run_async_safely(monitor.get_ai_consultation, question, include_data, days)
         # 保存咨询结果到消息表
         monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
         return jsonify({'response': response})
-    except RuntimeError as e:
-        # 处理在非主线程中运行asyncio.run可能出现的问题
-        if "cannot run loop while another loop is running" in str(e):
-            loop = asyncio.get_event_loop()
-            response = loop.run_until_complete(monitor.get_ai_consultation(question, include_data, days))
-            # 保存咨询结果到消息表
-            monitor.save_message("consultation", f"AI咨询: {question[:30]}...", response)
-            return jsonify({'response': response})
-        else:
-            raise e
     except Exception as e:
         logger.error(f"获取AI咨询失败: {e}")
         return jsonify({'error': 'AI咨询服务暂时不可用'}), 500
@@ -7145,28 +7174,30 @@ def api_ai_consult():
 def api_sync():
     """手动同步数据API"""
     try:
-        days = request.json.get('days', 7) if request.json else 7
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        days_raw = request.json.get('days', 7) if request.json else 7
+        try:
+            days = int(days_raw)
+        except (ValueError, TypeError):
+            days = 7
+        if days < 1:
+            days = 1
 
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
 
-        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
-            monitor.fetch_nightscout_data(start_date, end_date)
-        )
+        async def _sync_all():
+            glucose_data, treatment_data, activity_data, meter_data = await monitor.fetch_nightscout_data(start_date, end_date)
+            if glucose_data:
+                await monitor.save_glucose_data(glucose_data)
+            if treatment_data:
+                await monitor.save_treatment_data(treatment_data)
+            if activity_data:
+                await monitor.save_activity_data(activity_data)
+            if meter_data:
+                await monitor.save_meter_data(meter_data)
+            return glucose_data, treatment_data, activity_data, meter_data
 
-        if glucose_data:
-            loop.run_until_complete(monitor.save_glucose_data(glucose_data))
-        if treatment_data:
-            loop.run_until_complete(monitor.save_treatment_data(treatment_data))
-        if activity_data:
-            loop.run_until_complete(monitor.save_activity_data(activity_data))
-        if meter_data:
-            loop.run_until_complete(monitor.save_meter_data(meter_data))
-
-        loop.close()
+        glucose_data, treatment_data, activity_data, meter_data = run_async_safely(_sync_all)
 
         return jsonify({
             'success': True,
@@ -7228,16 +7259,13 @@ def api_config():
 def api_test_connection():
     """测试Nightscout连接API"""
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
         # 测试获取最近1天的数据
         today = datetime.now().strftime('%Y-%m-%d')
-        glucose_data, treatment_data, activity_data, meter_data = loop.run_until_complete(
-            monitor.fetch_nightscout_data(today, today)
+        glucose_data, treatment_data, activity_data, meter_data = run_async_safely(
+            monitor.fetch_nightscout_data,
+            today,
+            today
         )
-
-        loop.close()
 
         if glucose_data or treatment_data or activity_data or meter_data:
             return jsonify({
@@ -7570,16 +7598,8 @@ def api_test_ai():
             headers["Authorization"] = f"Bearer {api_key}"
         
         # 测试连接
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            result = loop.run_until_complete(
-                test_ai_connection_async(api_url, headers, request_data, timeout)
-            )
-            return jsonify(result)
-        finally:
-            loop.close()
+        result = run_async_safely(test_ai_connection_async, api_url, headers, request_data, timeout)
+        return jsonify(result)
             
     except Exception as e:
         return jsonify({
@@ -8039,14 +8059,15 @@ def handle_subscribe_notifications(data):
 
 
 if __name__ == '__main__':
-    # 配置日志
-    logger.add("logs/nightscout_web.log", rotation="1 day", retention="30 days")
-    logger.info("糖小助启动中...")
-
     # 创建必要的目录
     os.makedirs("logs", exist_ok=True)
     os.makedirs("static", exist_ok=True)
     os.makedirs("templates", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+
+    # 配置日志（先建目录，避免首次启动直接崩）
+    logger.add("logs/nightscout_web.log", rotation="1 day", retention="30 days")
+    logger.info("糖小助启动中...")
 
     # 启动应用
     port = int(os.environ.get('PORT', 1338))
