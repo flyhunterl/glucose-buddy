@@ -658,7 +658,7 @@ class NightscoutWebMonitor:
         """
         try:
             if analysis_time is None:
-                analysis_time = datetime.now()
+                analysis_time = self._now_in_config_timezone()
             
             # 获取小时数用于判断时间窗口
             hour = analysis_time.hour
@@ -695,7 +695,7 @@ class NightscoutWebMonitor:
         """
         try:
             if analysis_time is None:
-                analysis_time = datetime.now()
+                analysis_time = self._now_in_config_timezone()
             
             # 计算当天的开始时间（00:00）
             start_time = analysis_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -734,7 +734,7 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"获取智能数据范围失败: {e}")
             # 返回默认值
-            default_time = datetime.now()
+            default_time = self._now_in_config_timezone()
             start_time = default_time.replace(hour=0, minute=0, second=0, microsecond=0)
             return {
                 "start_time": start_time,
@@ -765,8 +765,11 @@ class NightscoutWebMonitor:
                 - timezone_info: 时区信息
         """
         try:
+            timezone_offset = self._get_valid_timezone_offset()
+            timezone_name = self._format_timezone_name(timezone_offset)
+
             if analysis_time is None:
-                analysis_time = datetime.now()
+                analysis_time = self._now_in_config_timezone()
             
             # 计算当天的开始时间（00:00）
             start_time = analysis_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -800,15 +803,17 @@ class NightscoutWebMonitor:
                 "range_description": range_description,
                 "expected_duration_hours": expected_duration_hours,
                 "analysis_time_str": analysis_time_str,
-                "timezone_info": "UTC+8",
-                "current_time_for_ai": analysis_time.strftime("%Y-%m-%d %H:%M:%S") + " (UTC+8)"
+                "timezone_info": timezone_name,
+                "current_time_for_ai": analysis_time.strftime("%Y-%m-%d %H:%M:%S") + f" ({timezone_name})"
             }
             
         except Exception as e:
             logger.error(f"获取动态数据范围失败: {e}")
             # 返回默认值
-            default_time = datetime.now()
+            default_time = self._now_in_config_timezone()
             start_time = default_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            timezone_offset = self._get_valid_timezone_offset()
+            timezone_name = self._format_timezone_name(timezone_offset)
             return {
                 "start_time": start_time,
                 "end_time": default_time,
@@ -817,8 +822,8 @@ class NightscoutWebMonitor:
                 "range_description": "00:00-当前时间",
                 "expected_duration_hours": default_time.hour,
                 "analysis_time_str": default_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "timezone_info": "UTC+8",
-                "current_time_for_ai": default_time.strftime("%Y-%m-%d %H:%M:%S") + " (UTC+8)"
+                "timezone_info": timezone_name,
+                "current_time_for_ai": default_time.strftime("%Y-%m-%d %H:%M:%S") + f" ({timezone_name})"
             }
 
     def filter_data_by_time_window(self, data: List[Dict], time_window: int, data_type: str) -> List[Dict]:
@@ -1453,15 +1458,15 @@ class NightscoutWebMonitor:
     async def perform_analysis_and_notify(self):
         """执行分析并发送通知"""
         # 获取当前时间，格式化为 YYYY-MM-DD HH:MM:SS
-        current_time = datetime.now()
+        current_time = self._now_in_config_timezone()
         today = current_time.strftime('%Y-%m-%d')
         current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
         
         logger.info(f"开始执行分析，时间范围：{today} 00:00:00 到 {current_time_str}")
         
         # 使用与首页相同的数据获取方式 - 从本地数据库获取当天数据
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = datetime.now()
+        today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = current_time
         
         # 获取当天数据（与首页API逻辑一致）
         glucose_data = self.get_glucose_data_from_db(start_date=today, end_date=today)
@@ -1786,7 +1791,7 @@ class NightscoutWebMonitor:
                     """
                     params = (start_date, end_date_str)
                 else:
-                    start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                    start_date_str = (self._now_in_config_timezone() - timedelta(days=days-1)).strftime('%Y-%m-%d')
                     query = """
                         SELECT date_string, shanghai_time, sgv, direction, trend
                         FROM glucose_data
@@ -1842,7 +1847,7 @@ class NightscoutWebMonitor:
                 """
                 params = (start_date, end_date_str)
             else:
-                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                start_date_str = (self._now_in_config_timezone() - timedelta(days=days-1)).strftime('%Y-%m-%d')
                 query = """
                     SELECT date_string, shanghai_time, event_type, carbs, protein, fat, insulin, notes, duration
                     FROM treatment_data
@@ -1892,7 +1897,7 @@ class NightscoutWebMonitor:
                 """
                 params = (start_date, end_date_str)
             else:
-                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                start_date_str = (self._now_in_config_timezone() - timedelta(days=days-1)).strftime('%Y-%m-%d')
                 query = """
                     SELECT date_string, shanghai_time, event_type, duration, notes
                     FROM activity_data
@@ -1938,7 +1943,7 @@ class NightscoutWebMonitor:
                 """
                 params = (start_date, end_date_str)
             else:
-                start_date_str = (datetime.now() - timedelta(days=days-1)).strftime('%Y-%m-%d')
+                start_date_str = (self._now_in_config_timezone() - timedelta(days=days-1)).strftime('%Y-%m-%d')
                 query = """
                     SELECT date_string, shanghai_time, sgv
                     FROM meter_data
@@ -2014,6 +2019,17 @@ class NightscoutWebMonitor:
         except Exception as e:
             logger.error(f"读取时区配置失败: {e}，使用默认值UTC+8")
             return 8
+
+    def _format_timezone_name(self, timezone_offset: int) -> str:
+        """格式化时区名称（例如UTC+8/UTC-5）"""
+        sign = "+" if timezone_offset >= 0 else ""
+        return f"UTC{sign}{timezone_offset}"
+
+    def _now_in_config_timezone(self) -> datetime:
+        """获取配置时区的当前本地时间（无时区信息，和shanghai_time字段保持一致）"""
+        timezone_offset = self._get_valid_timezone_offset()
+        target_tz = timezone(timedelta(hours=timezone_offset))
+        return datetime.now(timezone.utc).astimezone(target_tz).replace(tzinfo=None)
     
     def _convert_to_local_hour(self, timestamp: datetime, timezone_offset: int) -> Optional[int]:
         """将UTC时间戳转换为本地时间小时
@@ -2539,13 +2555,10 @@ class NightscoutWebMonitor:
             if validation_result["data_quality_score"] < 80:
                 logger.warning(f"数据质量分数较低: {validation_result['data_quality_score']} - 将继续分析但结果可能不够准确")
             
-            # 动态数据范围分析初始化 - 使用UTC+8时区
-            current_time = datetime.now()
-            # 硬编码UTC+8时区偏移
-            timezone_offset = 8
-            # 计算UTC+8时区的当前时间
-            utc8_time = current_time + timedelta(hours=timezone_offset)
-            utc8_time = utc8_time.replace(tzinfo=None)  # 移除时区信息以保持一致性
+            # 动态数据范围分析初始化 - 使用配置的本地时区（和shanghai_time保持一致）
+            timezone_offset = self._get_valid_timezone_offset()
+            timezone_name = self._format_timezone_name(timezone_offset)
+            current_time = self._now_in_config_timezone()
             
             # 禁用时间窗口分段逻辑，始终使用动态数据范围
             time_window = None
@@ -2560,8 +2573,8 @@ class NightscoutWebMonitor:
             # 获取动态数据范围（00:00到当前分析时间）
             try:
                 # 获取动态数据范围
-                dynamic_range = self.get_dynamic_data_range(utc8_time)
-                logger.info(f"动态数据范围: {dynamic_range['range_description']} (UTC+8时间: {utc8_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                dynamic_range = self.get_dynamic_data_range(current_time)
+                logger.info(f"动态数据范围: {dynamic_range['range_description']} ({timezone_name}时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')})")
                 
                 # 暂时禁用动态数据范围过滤，使用全量数据
                 # filtered_glucose_data = self.filter_data_by_dynamic_range(glucose_data, dynamic_range, "glucose")
@@ -3233,9 +3246,9 @@ class NightscoutWebMonitor:
             key_glucose_values: 关键血糖值（空腹和餐后血糖）
         """
         
-        # 硬编码UTC+8时区偏移
-        timezone_offset = 8
-        timezone_name = f"UTC+{timezone_offset}"
+        # 使用配置的时区偏移（和shanghai_time字段保持一致）
+        timezone_offset = self._get_valid_timezone_offset()
+        timezone_name = self._format_timezone_name(timezone_offset)
         
         # 生成动态数据范围分析提示
         dynamic_range_info = ""
@@ -3268,14 +3281,9 @@ class NightscoutWebMonitor:
         
         # 获取动态数据范围信息
         if analysis_time is None:
-            analysis_time = datetime.now()
-            # 硬编码UTC+8时区偏移
-            utc8_time = analysis_time + timedelta(hours=timezone_offset)
-            utc8_time = utc8_time.replace(tzinfo=None)
-        else:
-            utc8_time = analysis_time
+            analysis_time = self._now_in_config_timezone()
         
-        data_range = self.get_dynamic_data_range(utc8_time)
+        data_range = self.get_dynamic_data_range(analysis_time)
         dynamic_range_info = f"**动态数据范围分析**：{data_range['range_description']}（预期时长：{data_range['expected_duration_hours']:.1f}小时）"
         
         # 添加当前时间信息和餐食时间判断逻辑
@@ -3530,7 +3538,7 @@ class NightscoutWebMonitor:
         treatment_prompt = " ".join(treatment_info) if treatment_info else "无特殊治疗方案"
 
         # 使用动态数据范围分析
-        current_time = analysis_time or datetime.now()
+        current_time = analysis_time or self._now_in_config_timezone()
         today_date = current_time.strftime("%m月%d日")
         
         # 生成智能分析指导
@@ -5431,7 +5439,7 @@ class NightscoutWebMonitor:
                 'trend_rate': round(avg_change, 2),
                 'algorithm_used': 'enhanced_dynamic_weight_trend_extrapolation',
                 'data_points_count': len(recent_glucose_values),
-                'prediction_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'prediction_time': self._now_in_config_timezone().strftime('%Y-%m-%d %H:%M:%S'),
                 'prediction_points': prediction_points,
                 'quality_assessment': quality_assessment,
                 'confidence_breakdown': enhanced_confidence,
@@ -5604,8 +5612,8 @@ class NightscoutWebMonitor:
         try:
             if not sorted_data:
                 return 0.0
-            
-            current_time = datetime.now()
+             
+            current_time = self._now_in_config_timezone()
             time_gaps = []
             
             for i in range(len(sorted_data) - 1):
@@ -6195,6 +6203,7 @@ class NightscoutWebMonitor:
                 return 0.0
             
             quality_score = 100.0
+            now_local = self._now_in_config_timezone()
             
             # 1. 基于数值范围的质量评分
             if sgv < 30 or sgv > 400:
@@ -6207,8 +6216,8 @@ class NightscoutWebMonitor:
             # 2. 基于时间新鲜度的评分
             try:
                 entry_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                time_diff_minutes = (datetime.now() - entry_time).total_seconds() / 60
-                
+                time_diff_minutes = (now_local - entry_time).total_seconds() / 60
+                 
                 if time_diff_minutes > 120:  # 超过2小时
                     quality_score *= 0.5
                 elif time_diff_minutes > 60:  # 超过1小时
@@ -6238,7 +6247,7 @@ class NightscoutWebMonitor:
             return lifestyle_factors
         
         try:
-            current_time = datetime.now()
+            current_time = self._now_in_config_timezone()
             # 考虑4小时内的饮食影响和2小时内的运动影响
             meal_cutoff = current_time - timedelta(hours=4)
             exercise_cutoff = current_time - timedelta(hours=2)
@@ -7034,15 +7043,15 @@ def api_analysis():
     """获取AI分析API"""
     try:
         # 获取当前时间，格式化为 YYYY-MM-DD HH:MM:SS
-        current_time = datetime.now()
+        current_time = monitor._now_in_config_timezone()
         today = current_time.strftime('%Y-%m-%d')
         current_time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
         
         logger.info(f"开始执行手动分析，时间范围：{today} 00:00:00 到 {current_time_str}")
         
         # 使用与首页相同的数据获取方式 - 从本地数据库获取当天数据
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = datetime.now()
+        today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = current_time
         
         # 获取当天数据（与首页API逻辑一致）
         glucose_data = monitor.get_glucose_data_from_db(start_date=today, end_date=today)
