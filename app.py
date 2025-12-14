@@ -5414,7 +5414,7 @@ class NightscoutWebMonitor:
             
             if len(recent_glucose_values) < 5:
                 raise ValueError("有效的血糖数据点不足")
-            
+             
             # 3. 饮食和运动数据整合
             lifestyle_factors = self._process_lifestyle_data(treatment_data, cleaned_data)
             
@@ -5439,14 +5439,12 @@ class NightscoutWebMonitor:
                 trend_confidence = base_change_rate['conservative_confidence']
             
             # 生成10、20、30分钟三个预测点
-            current_time_factor = time.time() % 60 / 60.0  # 0-1之间的小时间扰动
             for minutes in [10, 20, 30]:
                 # 使用动态权重和趋势置信度调整预测，考虑生活方式因素
-                # 添加基于当前时间的小扰动，确保重新预测有轻微差异
-                time_noise = (current_time_factor - 0.5) * 0.2  # ±0.1的扰动
-                time_factor = (minutes / 5.0) * (1 + time_noise)  # 相对于5分钟的倍数
+                # 不引入任何随机扰动，保证同样输入得到稳定可复现的输出
+                time_factor = (minutes / 5.0)  # 相对于5分钟的倍数
                 lifestyle_adjustment = self._calculate_lifestyle_adjustment(lifestyle_factors, minutes)
-                
+                 
                 projected_change = avg_change * time_factor * (0.7 + 0.3 * trend_confidence) + lifestyle_adjustment * 0.8
                 predicted_value = current_glucose_mgdl + projected_change
                 prediction_points.append({
@@ -5518,18 +5516,11 @@ class NightscoutWebMonitor:
                     except Exception as retry_e:
                         logger.error(f"自动重新预测失败: {retry_e}")
                         # 继续返回原始预测结果
-            
+             
             prediction_result['validation_result'] = validation_result
-            
-            # 如果校验失败，调整预测结果
-            if not validation_result['is_valid']:
-                logger.warning(f"预测结果校验失败: {validation_result['warnings']}")
-                # 基于校验结果调整置信度
-                prediction_result['confidence_score'] *= 0.7
-                prediction_result['validation_warnings'] = validation_result['warnings']
-            
+             
             return prediction_result
-            
+             
         except Exception as e:
             logger.error(f"增强版血糖预测失败: {e}")
             raise e
@@ -5557,8 +5548,8 @@ class NightscoutWebMonitor:
                     if len(recent_changes) % 2 == 1:
                         median_change = recent_changes[len(recent_changes) // 2]
                     else:
-                        median_change = (recent_changes[len(recent_changes) // 2 - 1] + recent_changes[len(recent_values) // 2]) / 2
-                    
+                        median_change = (recent_changes[len(recent_changes) // 2 - 1] + recent_changes[len(recent_changes) // 2]) / 2
+                     
                     # 应用保守调整因子
                     conservative_change = median_change * 0.6  # 保守因子
                 else:
@@ -6294,7 +6285,7 @@ class NightscoutWebMonitor:
             # 考虑4小时内的饮食影响和2小时内的运动影响
             meal_cutoff = current_time - timedelta(hours=4)
             exercise_cutoff = current_time - timedelta(hours=2)
-            
+             
             for entry in treatment_data:
                 entry_time_str = entry.get('shanghai_time', '')
                 if not entry_time_str:
@@ -6302,15 +6293,22 @@ class NightscoutWebMonitor:
                     
                 try:
                     entry_time = datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
-                    event_type = entry.get('eventType', '').lower()
-                    
+                    event_type = (entry.get('event_type') or entry.get('eventType') or '').lower()
+                    carbs = entry.get('carbs', 0) or entry.get('carbohydrates', 0) or 0
+                    protein = entry.get('protein', 0) or 0
+                    fat = entry.get('fat', 0) or 0
+                    duration = entry.get('duration', 0) or 0
+                    notes = entry.get('notes', '') or ''
+                     
                     # 处理饮食数据
-                    if any(food_keyword in event_type for food_keyword in ['餐', '食', 'breakfast', 'lunch', 'dinner', 'snack']):
+                    is_meal = (
+                        carbs > 0 or
+                        any(food_keyword in event_type for food_keyword in [
+                            'meal', 'carb', 'breakfast', 'lunch', 'dinner', 'snack', '餐', '食'
+                        ])
+                    )
+                    if is_meal:
                         if entry_time >= meal_cutoff:
-                            carbs = entry.get('carbs', 0) or entry.get('carbohydrates', 0)
-                            protein = entry.get('protein', 0) or 0
-                            fat = entry.get('fat', 0) or 0
-                            
                             meal_data = {
                                 'time': entry_time_str,
                                 'minutes_ago': int((current_time - entry_time).total_seconds() / 60),
@@ -6325,13 +6323,16 @@ class NightscoutWebMonitor:
                             if carbs > 0:
                                 time_decay = max(0.1, 1.0 - meal_data['minutes_ago'] / 240.0)  # 4小时衰减
                                 lifestyle_factors['carb_impact'] += carbs * 1.2 * time_decay * (0.8 + 0.2 * time_decay)
-                    
+                     
                     # 处理运动数据
-                    elif any(exercise_keyword in event_type for exercise_keyword in ['运动', 'exercise', 'activity', 'run', 'walk', 'gym']):
+                    is_exercise = (
+                        duration > 0 or
+                        any(exercise_keyword in event_type for exercise_keyword in [
+                            'exercise', 'activity', 'run', 'walk', 'gym', '运动'
+                        ])
+                    )
+                    if is_exercise and not is_meal:
                         if entry_time >= exercise_cutoff:
-                            duration = entry.get('duration', 0) or 0
-                            notes = entry.get('notes', '') or ''
-                            
                             exercise_data = {
                                 'time': entry_time_str,
                                 'minutes_ago': int((current_time - entry_time).total_seconds() / 60),
