@@ -1513,7 +1513,7 @@ class NightscoutWebMonitor:
         await self.sync_recent_data()
 
         schedule_cfg = self.config.get("schedule", {})
-        if not schedule_cfg.get("enable_auto_alerts", True):
+        if not schedule_cfg.get("enable_auto_alerts", False):
             logger.info("已禁用后端自动报警触发（schedule.enable_auto_alerts = false）")
             return
 
@@ -7997,13 +7997,27 @@ def api_predict_glucose():
         
         # 评估低血糖风险
         risk_assessment = monitor.assess_hypoglycemia_risk(prediction_result['predicted_glucose_mgdl'])
-        
-        # 如果启用了警报且风险不为LOW，创建警报
-        if config.get('enable_alerts', True) and risk_assessment['risk_level'] != 'LOW':
-            alert_id = monitor.create_hypoglycemia_alert(risk_assessment)
-            if alert_id > 0:
-                # 发送邮件通知
-                monitor.send_glucose_alert_notification(risk_assessment, alert_id)
+
+        # 是否发送报警通知：
+        # - 启用后端定时报警（schedule.enable_auto_alerts=true）时，/api/predict 默认不再发通知，避免刷新页面就轰炸
+        # - 兼容旧行为：未启用后端定时报警时，默认仍会在需要时发送通知
+        schedule_cfg = monitor.config.get("schedule", {})
+        backend_auto_alerts_enabled = bool(schedule_cfg.get("enable_auto_alerts", False))
+        notify_arg = request.args.get("notify", "").strip().lower()
+        if notify_arg in ("true", "1", "yes", "y"):
+            should_notify = True
+        elif notify_arg in ("false", "0", "no", "n"):
+            should_notify = False
+        else:
+            should_notify = not backend_auto_alerts_enabled
+
+        if should_notify and config.get('enable_alerts', True) and risk_assessment.get('risk_level') != 'LOW':
+            cooldown_minutes = monitor._get_alert_cooldown_minutes()
+            risk_level = risk_assessment.get("risk_level", "LOW")
+            if cooldown_minutes <= 0 or not monitor._has_recent_sent_alert(risk_level, cooldown_minutes):
+                alert_id = monitor.create_hypoglycemia_alert(risk_assessment)
+                if alert_id > 0:
+                    monitor.send_glucose_alert_notification(risk_assessment, alert_id)
         
         return jsonify({
             'prediction': prediction_result,
