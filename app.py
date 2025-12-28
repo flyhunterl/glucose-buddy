@@ -1495,11 +1495,102 @@ class NightscoutWebMonitor:
             logger.error(f"定时分析失败: {e}")
 
     def scheduled_sync(self):
-        """定时同步任务"""
+        """定时同步任务（同步 + 低血糖报警）"""
         try:
-            run_async_safely(self.sync_recent_data)
+            run_async_safely(self.sync_and_check_hypoglycemia_alerts)
         except Exception as e:
             logger.error(f"定时同步失败: {e}")
+
+    async def sync_and_check_hypoglycemia_alerts(self):
+        """同步数据后执行一次低血糖预测报警检查。
+
+        目标：把“报警触发”从依赖前端调用 /api/predict，改为后端定时任务自动触发。
+
+        说明：
+        - 同步失败时 sync_recent_data() 内部会捕获并记录异常；这里仍会尝试基于本地DB做一次预测检查。
+        - 通过通知冷却时间避免在持续风险场景下频繁轰炸用户。
+        """
+        await self.sync_recent_data()
+
+        schedule_cfg = self.config.get("schedule", {})
+        if not schedule_cfg.get("enable_auto_alerts", True):
+            logger.info("已禁用后端自动报警触发（schedule.enable_auto_alerts = false）")
+            return
+
+        try:
+            self.check_and_send_hypoglycemia_alert_from_db(source="scheduler")
+        except ValueError as ve:
+            logger.info(f"定时低血糖预测数据不足，跳过报警检查: {ve}")
+        except Exception as e:
+            logger.error(f"定时低血糖报警检查失败: {e}")
+
+    def check_and_send_hypoglycemia_alert_from_db(self, source: str = "scheduler") -> bool:
+        """从本地数据库读取数据，执行预测并在需要时发送低血糖报警通知。
+
+        返回值：本次是否实际发送了报警通知（邮件/微信等）。
+        """
+        user_cfg = self.get_user_alert_config()
+        if not user_cfg.get("enable_predictions", True):
+            logger.info(f"血糖预测功能已禁用，跳过后端报警检查（source={source}）")
+            return False
+        if not user_cfg.get("enable_alerts", True):
+            logger.info(f"血糖报警功能已禁用，跳过后端报警检查（source={source}）")
+            return False
+
+        glucose_data = self.get_glucose_data_from_db(days=7)
+        treatment_data = self.get_treatment_data_from_db(days=7)
+
+        prediction_result = self.predict_glucose(glucose_data, treatment_data, force_current_based=False)
+        self.save_prediction_result(prediction_result)
+
+        risk_assessment = self.assess_hypoglycemia_risk(prediction_result["predicted_glucose_mgdl"])
+        risk_level = risk_assessment.get("risk_level", "LOW")
+        if risk_level == "LOW":
+            return False
+
+        cooldown_minutes = self._get_alert_cooldown_minutes()
+        if cooldown_minutes > 0 and self._has_recent_sent_alert(risk_level, cooldown_minutes):
+            logger.info(f"报警通知处于冷却期，跳过发送（risk={risk_level}, cooldown={cooldown_minutes}min, source={source}）")
+            return False
+
+        alert_id = self.create_hypoglycemia_alert(risk_assessment)
+        if alert_id <= 0:
+            return False
+
+        return bool(self.send_glucose_alert_notification(risk_assessment, alert_id))
+
+    def _get_alert_cooldown_minutes(self) -> int:
+        """获取报警通知冷却时间（分钟）。0 表示不启用冷却。"""
+        try:
+            raw = self.config.get("notification", {}).get("alert_cooldown_minutes", 30)
+            cooldown = int(raw)
+            return max(0, cooldown)
+        except Exception:
+            return 30
+
+    def _has_recent_sent_alert(self, risk_level: str, cooldown_minutes: int) -> bool:
+        """是否在冷却窗口内已经发送过同风险级别的报警通知。"""
+        try:
+            cutoff_time = (self._now_in_config_timezone() - timedelta(minutes=cooldown_minutes)).strftime('%Y-%m-%d %H:%M:%S')
+
+            conn = sqlite3.connect(self.get_database_path())
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM hypoglycemia_alerts
+                WHERE risk_level = ?
+                  AND notification_sent = 1
+                  AND notification_time IS NOT NULL
+                  AND notification_time >= ?
+                ORDER BY notification_time DESC
+                LIMIT 1
+            """, (risk_level, cutoff_time))
+            row = cursor.fetchone()
+            conn.close()
+
+            return row is not None
+        except Exception as e:
+            logger.warning(f"检查报警冷却期失败，默认不做冷却: {e}")
+            return False
 
     async def perform_analysis_and_notify(self):
         """执行分析并发送通知"""

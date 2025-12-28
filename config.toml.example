@@ -25,11 +25,15 @@ timeout = 60
 [schedule]
 analysis_times = ["10:00", "15:00", "21:00"]
 enable_auto_analysis = false
+# 是否启用后端定时低血糖报警触发（不依赖前端访问 /api/predict）
+enable_auto_alerts = true
 sync_interval_minutes = 15
 
 [notification]
 enable_web_push = true
 enable_email = false
+# 报警通知冷却时间（分钟），用于避免持续风险时频繁轰炸；设为 0 表示不启用冷却
+alert_cooldown_minutes = 30
 
 [email]
 smtp_server = "smtp.gmail.com"
