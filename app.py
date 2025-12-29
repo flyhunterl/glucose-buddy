@@ -25,6 +25,7 @@ from email.utils import formatdate
 from contextlib import contextmanager
 from functools import lru_cache, wraps
 import aiohttp
+import requests
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_socketio import SocketIO, emit
 from loguru import logger
@@ -41,29 +42,26 @@ def run_async_safely(async_func, *args, **kwargs):
     就退化为在新线程里运行，避免直接抛 RuntimeError。
     """
     try:
+        asyncio.get_running_loop()
+    except RuntimeError:
         return asyncio.run(async_func(*args, **kwargs))
-    except RuntimeError as e:
-        msg = str(e)
-        if ("asyncio.run() cannot be called from a running event loop" not in msg
-                and "cannot run the event loop while another loop is running" not in msg):
-            raise
 
-        result_holder = {}
-        error_holder = {}
+    result_holder = {}
+    error_holder = {}
 
-        def _runner():
-            try:
-                result_holder["result"] = asyncio.run(async_func(*args, **kwargs))
-            except Exception as ex:
-                error_holder["error"] = ex
+    def _runner():
+        try:
+            result_holder["result"] = asyncio.run(async_func(*args, **kwargs))
+        except Exception as ex:
+            error_holder["error"] = ex
 
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-        t.join()
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join()
 
-        if "error" in error_holder:
-            raise error_holder["error"]
-        return result_holder.get("result")
+    if "error" in error_holder:
+        raise error_holder["error"]
+    return result_holder.get("result")
 
 def ai_retry_decorator(max_retries=3):
     """
@@ -4414,30 +4412,32 @@ class NightscoutWebMonitor:
                 "content": content
             }
 
-            # 发送请求
             url = f"https://www.xxtui.com/xxtui/{api_key}"
-            headers = {
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
 
-            async def send_request():
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, headers=headers, timeout=30) as response:
-                        if response.status == 200:
-                            return True, await response.text()
-                        else:
-                            return False, f"HTTP {response.status}: {await response.text()}"
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
+            except requests.exceptions.Timeout as e:
+                elapsed_time = time.time() - start_time
+                logger.error(f"XXTUI通知发送超时: {e} (耗时: {elapsed_time:.2f}秒)")
+                return False
+            except requests.exceptions.RequestException as e:
+                elapsed_time = time.time() - start_time
+                logger.error(f"XXTUI通知发送网络异常: {e} (耗时: {elapsed_time:.2f}秒)")
+                return False
 
-            # 运行异步请求（避免事件循环泄漏）
-            success, result = run_async_safely(send_request)
-
-            if success:
+            if response.status_code == 200:
                 elapsed_time = time.time() - start_time
                 logger.info(f"XXTUI通知发送成功: {title} (耗时: {elapsed_time:.2f}秒)")
                 return True
             else:
                 elapsed_time = time.time() - start_time
-                logger.error(f"XXTUI通知发送失败: {result} (耗时: {elapsed_time:.2f}秒)")
+                response_text = (response.text or "").strip()
+                if len(response_text) > 500:
+                    response_text = response_text[:500] + "...(已截断)"
+                logger.error(
+                    f"XXTUI通知发送失败: HTTP {response.status_code}: {response_text} (耗时: {elapsed_time:.2f}秒)"
+                )
                 return False
 
         except Exception as e:
