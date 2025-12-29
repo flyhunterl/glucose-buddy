@@ -4559,9 +4559,29 @@ class NightscoutWebMonitor:
 
 请及时采取措施。
 
-此通知由糖小助自动发送
+            此通知由糖小助自动发送
 """
             
+            # Web 推送（浏览器通知 + 页面 toast）
+            # 这是默认用户最常用的报警方式；否则只开了 enable_web_push 的人会“永远收不到报警”。
+            methods_raw = alert_config.get("notification_methods") or "web"
+            methods = {m.strip().lower() for m in str(methods_raw).split(",") if m.strip()}
+            if "web" in methods:
+                if self.config.get("notification", {}).get("enable_web_push", False):
+                    try:
+                        title = f"低血糖预警 - {risk_assessment.get('risk_level', 'UNKNOWN')}风险"
+                        message = (
+                            f"{risk_assessment.get('risk_description', '')}\n"
+                            f"预测血糖: {risk_assessment.get('predicted_glucose_mmol')} mmol/L "
+                            f"({risk_assessment.get('predicted_glucose_mgdl')} mg/dL)"
+                        ).strip()
+                        self.send_web_notification(title, message)
+                        notification_sent = True
+                    except Exception as e:
+                        logger.error(f"血糖报警Web通知发送失败: {e}")
+                else:
+                    logger.info("Web推送通知已禁用，跳过Web通知发送")
+
             # 发送邮件通知
             if alert_config.get('enable_email_alerts', False):
                 if self.config.get("notification", {}).get("enable_email", False):
