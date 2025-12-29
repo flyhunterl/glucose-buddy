@@ -225,11 +225,15 @@ class NightscoutWebMonitor:
             "schedule": {
                 "analysis_times": ["10:00", "15:00", "21:00"],
                 "enable_auto_analysis": True,
+                # 是否启用后端定时低血糖报警触发（不依赖前端访问 /api/predict）
+                "enable_auto_alerts": False,
                 "sync_interval_minutes": 10
             },
             "notification": {
                 "enable_web_push": True,
-                "enable_email": False
+                "enable_email": False,
+                # 报警通知冷却时间（分钟），用于避免持续风险时频繁轰炸；设为 0 表示不启用冷却
+                "alert_cooldown_minutes": 30
             },
             "email": {
                 "smtp_server": "",
@@ -350,10 +354,23 @@ class NightscoutWebMonitor:
         """保存配置文件"""
         try:
             import toml
+            import copy
             config_path = self._get_config_path()
+            # 配置页面提交的是“部分字段”，直接覆盖会把未展示的字段（如 database.path、schedule.enable_auto_alerts）丢掉。
+            # 这里做一次深度合并：以当前配置为基准，用新配置覆盖对应字段，其它字段保持不变。
+            def deep_merge(base: dict, incoming: dict) -> dict:
+                merged = copy.deepcopy(base)
+                for key, value in incoming.items():
+                    if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                        merged[key] = deep_merge(merged[key], value)
+                    else:
+                        merged[key] = value
+                return merged
+
+            merged_config = deep_merge(self.config or {}, config or {})
             with open(config_path, "w", encoding="utf-8") as f:
-                toml.dump(config, f)
-            self.config = config
+                toml.dump(merged_config, f)
+            self.config = merged_config
             logger.info(f"配置已保存到 {config_path}")
             return True
         except Exception as e:
@@ -4382,10 +4399,6 @@ class NightscoutWebMonitor:
         start_time = time.time()
         
         try:
-            if not self.config.get("alert", {}).get("enable_xxtui_alerts", False):
-                logger.info("XXTUI通知已禁用，跳过发送")
-                return False
-
             xxtui_config = self.config.get("xxtui", {})
             api_key = xxtui_config.get("api_key")
             from_name = xxtui_config.get("from", "Nightscout")
@@ -4581,9 +4594,12 @@ class NightscoutWebMonitor:
                         logger.error(f"血糖报警Web通知发送失败: {e}")
                 else:
                     logger.info("Web推送通知已禁用，跳过Web通知发送")
-
+            
             # 发送邮件通知
-            if alert_config.get('enable_email_alerts', False):
+            email_alerts_enabled = bool(alert_config.get('enable_email_alerts', False)) or bool(
+                self.config.get("alert", {}).get("enable_email_alerts", False)
+            )
+            if email_alerts_enabled:
                 if self.config.get("notification", {}).get("enable_email", False):
                     email_success = self.send_email_notification(subject, content)
                     if email_success:
@@ -4597,7 +4613,10 @@ class NightscoutWebMonitor:
                 logger.info("血糖报警邮箱通知已禁用，跳过邮件发送")
             
             # 发送微信/短信通知
-            if alert_config.get('enable_xxtui_alerts', False):
+            xxtui_alerts_enabled = bool(alert_config.get('enable_xxtui_alerts', False)) or bool(
+                self.config.get("alert", {}).get("enable_xxtui_alerts", False)
+            )
+            if xxtui_alerts_enabled:
                 xxtui_success = self.send_xxtui_notification(subject, content.strip())
                 if xxtui_success:
                     logger.info(f"血糖报警微信/短信发送成功 - 风险级别: {risk_assessment['risk_level']}")

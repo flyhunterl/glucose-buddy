@@ -2894,7 +2894,8 @@
         }
         
         // 调用预测API
-        fetch('/api/predict')
+        // 手动点击预测时允许触发一次通知（便于测试，且不影响页面自动刷新场景）
+        fetch('/api/predict?notify=1')
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {

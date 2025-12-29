@@ -289,6 +289,16 @@
                                         </div>
                                         <div class="form-text">自动进行血糖分析并发送通知</div>
                                     </div>
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="enable-auto-alerts"
+                                                   {% if config.schedule.enable_auto_alerts %}checked{% endif %}>
+                                            <label class="form-check-label" for="enable-auto-alerts">
+                                                启用后端定时低血糖报警
+                                            </label>
+                                        </div>
+                                        <div class="form-text">无需前端打开页面，后端定时同步后自动判断中/高风险并推送通知</div>
+                                    </div>
                                 </div>
                                 <div class="col-md-6">
                                     <div class="mb-3">
@@ -341,6 +351,17 @@
                                             </label>
                                         </div>
                                         <div class="form-text">通过邮件发送分析报告</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="alert-cooldown-minutes" class="form-label">报警冷却时间 (分钟)</label>
+                                        <input type="number" class="form-control" id="alert-cooldown-minutes"
+                                               value="{{ config.notification.alert_cooldown_minutes }}"
+                                               min="0" max="240" step="1">
+                                        <div class="form-text">用于避免持续风险时频繁轰炸；设为 0 表示不启用冷却</div>
                                     </div>
                                 </div>
                             </div>
@@ -644,11 +665,13 @@
             schedule: {
                 analysis_times: document.getElementById('analysis-times').value.split(',').map(t => t.trim()).filter(t => t),
                 enable_auto_analysis: document.getElementById('enable-auto-analysis').checked,
+                enable_auto_alerts: document.getElementById('enable-auto-alerts').checked,
                 sync_interval_minutes: parseInt(document.getElementById('sync-interval').value)
             },
             notification: {
                 enable_web_push: document.getElementById('enable-web-push').checked,
-                enable_email: document.getElementById('enable-email').checked
+                enable_email: document.getElementById('enable-email').checked,
+                alert_cooldown_minutes: parseInt(document.getElementById('alert-cooldown-minutes').value) || 30
             },
             email: {
                 smtp_server: document.getElementById('smtp-server').value.trim(),
@@ -704,6 +727,11 @@
                 showNotification('启用邮件通知时，请填写完整的邮件配置', 'danger');
                 return;
             }
+        }
+
+        if (config.notification.alert_cooldown_minutes < 0) {
+            showNotification('报警冷却时间不能小于 0', 'danger');
+            return;
         }
         
         if (config.alert.enable_email_alerts) {
