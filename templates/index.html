@@ -2900,6 +2900,12 @@
                 if (data.status === 'success') {
                     updatePredictionDisplay(data.prediction, data.risk_assessment);
                     console.log('预测已更新');
+                    
+                    // 中/高风险：显示警报并推送提示
+                    if (data.risk_assessment && data.risk_assessment.risk_level !== 'LOW') {
+                        showAlert(data.risk_assessment);
+                        notifyRisk(data.risk_assessment);
+                    }
                 } else {
                     // 显示错误信息
                     if (confidenceEl) {
@@ -3219,6 +3225,36 @@
             }
         }, 5000);
     }
+
+    // 低血糖风险通知：页面 toast +（已授权时）浏览器系统通知
+    function notifyRisk(risk_assessment) {
+        if (!risk_assessment || !risk_assessment.risk_level || risk_assessment.risk_level === 'LOW') {
+            return;
+        }
+
+        const riskText = getRiskText(risk_assessment.risk_level);
+        const title = `${riskText} - 低血糖警报`;
+        const predicted = `预测血糖: ${risk_assessment.predicted_glucose_mmol} mmol/L (${risk_assessment.predicted_glucose_mgdl} mg/dL)`;
+        const detail = risk_assessment.risk_description ? `${risk_assessment.risk_description}；${predicted}` : predicted;
+
+        const toastType = risk_assessment.risk_level === 'HIGH' ? 'danger' : 'warning';
+        showNotification(`${title}: ${detail}`, toastType);
+
+        // 浏览器系统通知需要用户授权：右上角点一次“订阅通知”并允许通知权限
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+                new Notification(title, {
+                    body: `${risk_assessment.risk_description || ''}\n${predicted}`.trim(),
+                    icon: '/static/icon-192.png',
+                    badge: '/static/icon-192.png',
+                    tag: 'nightscout-hypo-alert',
+                    requireInteraction: true
+                });
+            } catch (e) {
+                console.warn('浏览器通知发送失败:', e);
+            }
+        }
+    }
     
     // 自动血糖预测 - 页面加载时自动执行
     function loadAutomaticPrediction() {
@@ -3264,6 +3300,7 @@
                     if (data.risk_assessment.risk_level !== 'LOW') {
                         console.log('检测到风险，显示警报:', data.risk_assessment.risk_level);
                         showAlert(data.risk_assessment);
+                        notifyRisk(data.risk_assessment);
                     } else {
                         console.log('风险等级为LOW，不显示警报');
                     }
