@@ -531,7 +531,7 @@ tail -f logs/app.log
 - [Chart.js](https://www.chartjs.org/) - 交互式图表库
 - [Bootstrap](https://getbootstrap.com/) - 前端 UI 框架
 - [aiohttp](https://docs.aiohttp.org/) - 异步 HTTP 客户端/服务器
-
+- [linux.do社区](https://linuuuux.do) -真诚、友善、团结、专业
 ### AI 服务
 - [OpenAI](https://openai.com/) - AI 语言模型服务
 - [Ollama](https://ollama.com/) - 本地 AI 模型运行环境
