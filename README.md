@@ -17,7 +17,7 @@
 
 
 ## 开源版/上线版对比
-| 功能 | [开源版](https://github.com/flyhunterl/glucose-buddy) | 上线版 （免费使用）|
+| 功能 | [开源版](https://github.com/flyhunterl/glucose-buddy) | [上线版(免费使用)](https://aixt.llingfei.com)|
 |---|---|---|
 | CGM 数据接入 | ⚠️ 主要从已有 Nightscout 拉取 | ✅ 每个用户使用独立 API Secret 直接上传 |
 | 个体化血糖预测 | ❌ 使用通用趋势外推算法，不训练个人模型 | ✅ 根据每个用户的历史数据训练个人机器学习模型 |
